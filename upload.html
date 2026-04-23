@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Upload Velocitek track — J/80 / J/70 Racing</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="style.css" />
+<style>
+  body { display: flex; flex-direction: column; padding: 24px; max-width: 640px; margin: 0 auto; }
+  h1 { color: #dbe7f3; margin: 0 0 4px; }
+  .hint { color: #8aa0b6; font-size: 12px; margin: 0 0 24px; }
+  label { display: block; color: #b6c6d6; font-size: 12px; margin-bottom: 4px; }
+  select, input[type=text] {
+    width: 100%; background: #16263a; color: #dbe7f3;
+    border: 1px solid #2d4661; border-radius: 6px;
+    padding: 8px 10px; font-size: 14px; margin-bottom: 16px;
+  }
+  #drop {
+    border: 2px dashed #3b5470; border-radius: 8px; padding: 40px 20px;
+    text-align: center; color: #8aa0b6; cursor: pointer;
+    transition: background 0.1s, border-color 0.1s; margin-bottom: 16px;
+  }
+  #drop.hover { background: #16263a; border-color: #6ea8ff; color: #dbe7f3; }
+  #drop strong { color: #dbe7f3; }
+  #log { background: #0f1924; border: 1px solid #264168; border-radius: 6px;
+    padding: 10px 12px; font-family: ui-monospace, monospace; font-size: 12px;
+    color: #dbe7f3; min-height: 100px; white-space: pre-wrap; overflow-y: auto;
+    max-height: 300px; }
+  .row-log { margin: 2px 0; }
+  .ok { color: #6fd06b; }
+  .err { color: #f87171; }
+  .progress { color: #facc15; }
+  a.back { color: #6ea8ff; text-decoration: none; font-size: 13px; }
+  a.back:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div style="margin-bottom: 16px;"><a class="back" href="/">← Back to replay</a></div>
+<h1>Upload a Velocitek VTK file</h1>
+<p class="hint">
+  Pick your boat, drag your <code>SESSION_*.VTK</code> file(s) onto the box below. The date is read automatically from the file. Files go straight to the fleet's shared storage; the race-day list on the main page refreshes on the next visit.
+</p>
+
+<label for="boat">Boat</label>
+<select id="boat">
+  <option value="Meltemi">Meltemi (HKG2231)</option>
+  <option value="Jammin'">Jammin' (HKG2261)</option>
+  <option value="Unknown Pleasures">Unknown Pleasures (HKG2263)</option>
+  <option value="Deep Blue">Deep Blue (HKG2230)</option>
+  <option value="Footloose">Footloose (HKG2252)</option>
+  <option value="Tigrina">Tigrina (HKG2251)</option>
+  <option value="J Chi">J Chi (HKG2235)</option>
+  <option value="Lila">Lila (HKG2239)</option>
+  <option value="Mozzie">Mozzie (HKG2259)</option>
+  <option value="JKAPPA">JKAPPA (HKG2237)</option>
+  <option value="Jupiter">Jupiter (HKG2587)</option>
+  <option value="JeNa PaBe">JeNa PaBe (HKG2253)</option>
+  <option value="Simplicity Jr.">Simplicity Jr. (HKG2256)</option>
+  <option value="Javelin">Javelin (HKG1529)</option>
+  <option value="Poiema">Poiema (HKG2265)</option>
+  <option value="Levity">Levity (HKG2267)</option>
+  <option value="Alchemist">Alchemist (HKG2262)</option>
+  <option value="Jahoo">Jahoo (HKG1530)</option>
+  <option value="Invictus">Invictus (HKG2236)</option>
+  <option value="Jelignite">Jelignite (HKG1428)</option>
+</select>
+
+<div id="drop">
+  <strong>Drop VTK files here</strong><br>or click to pick
+  <input type="file" id="pickFiles" accept=".vtk,.VTK" multiple hidden>
+</div>
+
+<div id="log"></div>
+
+<script>
+const dropEl = document.getElementById("drop");
+const pickEl = document.getElementById("pickFiles");
+const logEl = document.getElementById("log");
+const boatEl = document.getElementById("boat");
+
+function log(msg, cls = "") {
+  const row = document.createElement("div");
+  row.className = "row-log " + cls;
+  row.textContent = msg;
+  logEl.appendChild(row);
+  logEl.scrollTop = logEl.scrollHeight;
+  return row;
+}
+
+// Parse just the first Trackpoint from a VTK blob to read its epoch timestamp
+// → YYYY-MM-DD in Hong Kong time.
+async function dateFromVtk(file) {
+  const head = new Uint8Array(await file.slice(0, 512).arrayBuffer());
+  // Record stream: u16 LE len + proto bytes. First record is often a
+  // HardwareDescription — skip and scan for a trackpoint (field 1, wiretype 2).
+  let i = 0;
+  while (i + 2 < head.length) {
+    const len = head[i] | (head[i + 1] << 8);
+    i += 2;
+    if (!len || i + len > head.length) break;
+    const msg = head.subarray(i, i + len);
+    i += len;
+    // Peek: field 1 wiretype 2 → opening byte 0x0a
+    if (msg[0] === 0x0a) {
+      // Trackpoint submessage follows. Skip 1-byte length, then read
+      // field 1 (seconds) varint.
+      let p = 1;
+      // length varint
+      let shift = 0, subLen = 0, b;
+      do { b = msg[p++]; subLen |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+      // Now p points into submessage
+      // Expect tag 0x08 (field 1, wiretype 0) = seconds
+      if (msg[p++] === 0x08) {
+        let sec = 0; shift = 0;
+        do { b = msg[p++]; sec |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+        const hk = new Date((sec + 8 * 3600) * 1000);
+        const y = hk.getUTCFullYear();
+        const m = String(hk.getUTCMonth() + 1).padStart(2, "0");
+        const d = String(hk.getUTCDate()).padStart(2, "0");
+        return `${y}-${m}-${d}`;
+      }
+    }
+  }
+  return null;
+}
+
+async function uploadOne(file) {
+  const row = log(`${file.name} …`, "progress");
+  const boat = boatEl.value;
+  let date;
+  try { date = await dateFromVtk(file); }
+  catch (e) { row.className = "row-log err"; row.textContent = `${file.name} — couldn't read date from VTK`; return; }
+  if (!date) { row.className = "row-log err"; row.textContent = `${file.name} — no trackpoints found`; return; }
+
+  const fd = new FormData();
+  fd.append("boat", boat);
+  fd.append("date", date);
+  fd.append("filename", file.name.toUpperCase());
+  fd.append("file", file);
+
+  try {
+    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await r.json();
+    if (r.ok) {
+      row.className = "row-log ok";
+      row.textContent = `✓ ${boat} / ${date} / ${file.name}  (${(file.size/1024).toFixed(0)} KB)`;
+    } else {
+      row.className = "row-log err";
+      row.textContent = `✗ ${file.name} — ${data.error || r.statusText}`;
+    }
+  } catch (e) {
+    row.className = "row-log err";
+    row.textContent = `✗ ${file.name} — ${e.message}`;
+  }
+}
+
+async function handleFiles(files) {
+  const vtks = [...files].filter((f) => /\.vtk$/i.test(f.name));
+  if (!vtks.length) { log("No .VTK files", "err"); return; }
+  for (const f of vtks) await uploadOne(f);
+}
+
+dropEl.addEventListener("click", () => pickEl.click());
+pickEl.addEventListener("change", (e) => handleFiles(e.target.files));
+["dragenter", "dragover"].forEach((ev) =>
+  dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.add("hover"); })
+);
+["dragleave", "drop"].forEach((ev) =>
+  dropEl.addEventListener(ev, (e) => { e.preventDefault(); dropEl.classList.remove("hover"); })
+);
+dropEl.addEventListener("drop", (e) => handleFiles(e.dataTransfer.files));
+</script>
+</body>
+</html>

@@ -2218,10 +2218,19 @@ class RemoteVtkFile {
   }
 }
 
-(function autoLoadFromManifest() {
-  const recs = window.RECORDS;
+// Load the day index. In production we try the live /api/records Worker
+// endpoint first (reflects any freshly-uploaded VTK immediately); if that
+// 404s (local dev via http-server) we fall back to the records.js manifest
+// that was committed at last scan time.
+async function autoLoadFromManifest() {
+  let recs = null;
+  try {
+    const r = await fetch("/api/records", { cache: "no-store" });
+    if (r.ok) recs = await r.json();
+  } catch { /* worker not up; use the static manifest */ }
+  if (!recs || !Object.keys(recs).length) recs = window.RECORDS;
   if (!recs || !Object.keys(recs).length) {
-    statusEl.textContent = "No records.js manifest — pick a folder.";
+    statusEl.textContent = "No records — upload a VTK file.";
     return;
   }
   const files = [];
@@ -2231,7 +2240,8 @@ class RemoteVtkFile {
     }
   }
   indexFiles(files);
-})();
+}
+autoLoadFromManifest();
 if (clearBtn) clearBtn.addEventListener("click", () => {
   clearTracks();
   days.clear();
