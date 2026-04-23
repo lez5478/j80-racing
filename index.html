@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>J/80 / J/70 Racing app</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="sidebar">
+  <h1>J/80 / J/70 Racing</h1>
+  <p class="hint">RHKYC J/80 fleet · race replay from VTK tracks</p>
+  <div id="status"></div>
+  <h2>Race day</h2>
+  <select id="daysPicker" class="days-picker">
+    <option value="">— pick a race day —</option>
+  </select>
+  <div id="wind" hidden>
+    <h2>Wind that day</h2>
+    <div class="wind-body"></div>
+  </div>
+  <div id="windBarb" hidden>
+    <h2 class="wb-h2">
+      Live wind
+      <select id="windStation" class="wb-select" title="Pick a HKO station"></select>
+    </h2>
+    <div class="wb-readout">
+      <svg id="wbArrow" viewBox="-12 -12 24 24" width="38" height="38">
+        <circle cx="0" cy="0" r="11" fill="#16263a" stroke="#264168" stroke-width="1"/>
+        <path id="wbArrowPath" d="M0,-7 L4,3 L0,1 L-4,3 Z" fill="#6ea8ff" />
+      </svg>
+      <div class="wb-stats">
+        <div class="wb-line"><span id="wbDir">–</span><span class="wb-unit">°</span></div>
+        <div class="wb-line"><span id="wbSpd">–</span><span class="wb-unit">km/h · gust <span id="wbGust">–</span></span></div>
+      </div>
+    </div>
+    <div id="windBarbInfo" class="wb-info"></div>
+    <label class="wb-toggle">
+      <input type="checkbox" id="windGridToggle" checked />
+      Wind arrow grid
+    </label>
+    <label class="wb-toggle">
+      <input type="checkbox" id="windParticleToggle" checked />
+      Particle animation
+    </label>
+  </div>
+  <h2>Tracks on map</h2>
+  <div id="raceTabs" hidden></div>
+  <ul id="tracks"></ul>
+  <div id="scoreboard" hidden>
+    <h2 class="sb-h2">
+      <span class="sb-name">Race</span>
+      <span class="sb-meta"></span>
+    </h2>
+    <table class="sb-table">
+      <thead>
+        <tr><th>P</th><th>Boat</th><th>Sail</th><th>Finish</th><th>Elapsed</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div id="windShift" hidden>
+    <h2>Wind shift over the race</h2>
+    <svg id="windShiftSvg" viewBox="0 0 300 70" preserveAspectRatio="none"></svg>
+    <div class="ws-info"></div>
+  </div>
+  <div id="raceStats" hidden>
+    <h2>Race stats</h2>
+    <div class="rs-body">
+      <div class="rs-section" id="rsStart">
+        <div class="rs-label">Start</div>
+        <div class="rs-grid"></div>
+      </div>
+      <div class="rs-section" id="rsManeuvers">
+        <div class="rs-label">Maneuvers</div>
+        <div class="rs-grid"></div>
+      </div>
+      <div class="rs-section" id="rsPerf">
+        <div class="rs-label">Performance</div>
+        <div class="rs-grid"></div>
+      </div>
+      <div class="rs-section" id="rsExport">
+        <button class="rs-btn" id="exportGpxBtn">Download GPX</button>
+        <button class="rs-btn" id="exportReportBtn">Race report (PDF-print)</button>
+        <button class="rs-btn" id="copyLinkBtn">Copy share link</button>
+      </div>
+    </div>
+  </div>
+  <div id="readout" hidden>
+    <h2>Selected boat</h2>
+    <div class="readout-body">
+      <div class="ro-name"></div>
+      <div class="ro-grid">
+        <div><span class="ro-label">SOG</span><span class="ro-sog">–</span><span class="ro-unit">kn</span></div>
+        <div><span class="ro-label">COG</span><span class="ro-cog">–</span><span class="ro-unit">°</span></div>
+        <div><span class="ro-label">Time</span><span class="ro-time">–</span></div>
+        <div><span class="ro-label">Max SOG</span><span class="ro-max">–</span><span class="ro-unit">kn</span></div>
+        <div><span class="ro-label">Wind here</span><span class="ro-wind">–</span><span class="ro-unit">km/h</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="footer">
+    Tiles: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ·
+    Seamarks: © <a href="https://www.openseamap.org/">OpenSeaMap</a>
+  </div>
+</div>
+<div id="map"></div>
+<div id="playbar" hidden>
+  <button id="playBtn" class="pb-btn" title="Play / pause">▶</button>
+  <div class="pb-time"><span id="pbNow">–</span> / <span id="pbEnd">–</span></div>
+  <input id="pbSlider" type="range" min="0" max="1000" value="0" step="1" />
+  <select id="pbSpeed">
+    <option value="5">5×</option>
+    <option value="10" selected>10×</option>
+    <option value="30">30×</option>
+    <option value="50">50×</option>
+    <option value="100">100×</option>
+  </select>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="wind/lamma.js"></script>
+<script src="wind/timeseries.js"></script>
+<script src="wind/stations.js"></script>
+<script src="records.js"></script>
+<script src="race-results/races.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

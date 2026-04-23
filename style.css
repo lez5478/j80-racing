@@ -1,0 +1,320 @@
+html, body { margin: 0; padding: 0; height: 100%; font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+body { display: flex; }
+#sidebar {
+  width: 320px; flex: 0 0 320px; height: 100vh; overflow-y: auto;
+  background: #0f1924; color: #dbe7f3; padding: 16px 18px; box-sizing: border-box;
+  border-right: 1px solid #1f2d3d;
+}
+#sidebar h1 { font-size: 18px; margin: 0 0 6px; letter-spacing: 0.3px; }
+.hint { font-size: 12px; color: #8aa0b6; margin: 0 0 10px; }
+#map { flex: 1; height: 100vh; }
+
+#drop {
+  border: 2px dashed #3b5470; border-radius: 8px; padding: 22px 10px;
+  text-align: center; color: #8aa0b6; font-size: 13px; cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+#drop.hover { background: #16263a; border-color: #6ea8ff; color: #dbe7f3; }
+
+.row { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; }
+.btn {
+  background: #1e3148; color: #dbe7f3; border: 1px solid #2d4661;
+  padding: 6px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  display: inline-flex; align-items: center;
+}
+.btn:hover { background: #274363; }
+
+#status { font-size: 12px; color: #8aa0b6; min-height: 16px; margin: 6px 0; }
+
+#sidebar h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: 0.8px;
+  color: #8aa0b6; margin: 14px 0 6px; font-weight: 600;
+}
+
+.days-picker {
+  width: 100%; background: #16263a; color: #dbe7f3;
+  border: 1px solid #2d4661; border-radius: 6px;
+  padding: 8px 10px; font-size: 13px; font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.days-picker:hover { background: #1c3150; }
+.days-picker:focus { outline: none; border-color: #6ea8ff; }
+.days-picker option { background: #0f1924; color: #dbe7f3; }
+
+#tracks { list-style: none; padding: 0; margin: 8px 0 0; }
+#tracks li {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 8px; border-radius: 6px; background: #16263a;
+  margin-bottom: 6px; font-size: 12px;
+}
+#tracks li .swatch {
+  width: 14px; height: 14px; border-radius: 3px; flex: 0 0 14px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.2) inset;
+}
+#tracks li .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tracks li .meta { color: #8aa0b6; font-size: 11px; }
+#tracks li button {
+  background: transparent; border: none; color: #8aa0b6; cursor: pointer;
+  font-size: 14px; padding: 0 4px;
+}
+#tracks li button:hover { color: #ff6b6b; }
+#tracks li.hidden .name, #tracks li.hidden .meta { opacity: 0.4; text-decoration: line-through; }
+
+#tracks li.selected {
+  outline: 2px solid #6ea8ff; outline-offset: -2px;
+}
+
+#readout { margin-top: 12px; }
+.readout-body {
+  background: #16263a; border: 1px solid #264168; border-radius: 6px;
+  padding: 10px 12px;
+}
+.ro-name { font-weight: 600; font-size: 13px; margin-bottom: 8px; }
+.ro-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px;
+}
+.ro-grid > div { display: flex; align-items: baseline; gap: 4px; }
+.ro-label { font-size: 10px; color: #8aa0b6; text-transform: uppercase; letter-spacing: 0.5px; flex: 1; }
+.ro-grid span:not(.ro-label):not(.ro-unit) {
+  font-variant-numeric: tabular-nums; font-size: 15px; font-weight: 600; color: #fff;
+}
+.ro-unit { font-size: 10px; color: #8aa0b6; }
+.ro-grid > div:nth-child(3) { grid-column: span 2; }
+.ro-grid > div:nth-child(3) span:not(.ro-label) { font-size: 12px; font-weight: 500; }
+
+.ro-race {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid #264168;
+  font-size: 11px; color: #b6c6d6; line-height: 1.5;
+}
+.ro-race-title { font-weight: 600; color: #fff; }
+.ro-race-me { color: #6ea8ff; font-weight: 600; }
+.ro-race-fleet { color: #8aa0b6; }
+
+/* Playback bar overlay at bottom of the map */
+#playbar {
+  position: fixed; bottom: 14px; left: 340px; right: 14px;
+  background: rgba(15, 25, 36, 0.92); color: #dbe7f3;
+  border: 1px solid #264168; border-radius: 8px;
+  padding: 8px 12px; display: flex; align-items: center; gap: 12px;
+  backdrop-filter: blur(4px); z-index: 1000;
+  font-family: inherit; font-size: 12px;
+}
+.pb-btn {
+  background: #1e3148; color: #dbe7f3; border: 1px solid #2d4661;
+  width: 32px; height: 32px; border-radius: 6px; font-size: 14px; cursor: pointer;
+}
+.pb-btn:hover { background: #274363; }
+.pb-time { font-variant-numeric: tabular-nums; min-width: 130px; color: #b6c6d6; }
+#pbSlider {
+  flex: 1; accent-color: #6ea8ff; height: 4px;
+}
+#pbSpeed {
+  background: #1e3148; color: #dbe7f3; border: 1px solid #2d4661;
+  border-radius: 4px; padding: 4px 6px; font-size: 12px;
+}
+
+/* HKO 24h wind barb chart */
+#windBarb { margin-top: 12px; }
+.wb-h2 { display: flex !important; align-items: center; gap: 8px; }
+.wb-select {
+  flex: 1; background: #1e3148; color: #dbe7f3;
+  border: 1px solid #2d4661; border-radius: 4px; padding: 4px 6px;
+  font-size: 11px; text-transform: none; letter-spacing: 0; font-weight: 400;
+}
+.wb-readout {
+  display: flex; align-items: center; gap: 12px;
+  background: #16263a; border: 1px solid #264168; border-radius: 6px;
+  padding: 8px 10px;
+}
+#wbArrow { flex: 0 0 38px; }
+#wbArrowPath { transform-origin: 0 0; transition: transform 0.3s ease; }
+.wb-stats { flex: 1; }
+.wb-line {
+  font-variant-numeric: tabular-nums;
+  display: flex; align-items: baseline; gap: 4px;
+}
+.wb-line:first-child { color: #fff; font-size: 16px; font-weight: 600; }
+.wb-line:last-child { color: #b6c6d6; font-size: 12px; margin-top: 2px; }
+.wb-unit { font-size: 10px; color: #8aa0b6; font-weight: 400; }
+.wb-info { font-size: 10px; color: #8aa0b6; margin-top: 4px; }
+.wb-toggle {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: #b6c6d6; margin-top: 6px; cursor: pointer;
+}
+.wb-toggle input { accent-color: #6ea8ff; }
+
+/* Race tab pills (above the tracks list) */
+#raceTabs {
+  display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 8px;
+}
+.race-tab {
+  background: #16263a; color: #b6c6d6; border: 1px solid #2d4661;
+  padding: 4px 9px; border-radius: 999px; font-size: 11px; cursor: pointer;
+  font-variant-numeric: tabular-nums; line-height: 1.4;
+}
+.race-tab:hover { background: #1c3150; color: #fff; }
+.race-tab.active {
+  background: #6ea8ff; color: #0f1924; border-color: #6ea8ff;
+  font-weight: 600;
+}
+
+/* Race scoreboard */
+#scoreboard { margin-top: 12px; }
+.sb-h2 {
+  display: flex !important; align-items: baseline; justify-content: space-between;
+  margin-bottom: 6px !important;
+}
+.sb-h2 .sb-name {
+  color: #fff; font-size: 13px; text-transform: none;
+  letter-spacing: 0; font-weight: 700;
+}
+.sb-h2 .sb-meta {
+  color: #8aa0b6; font-size: 11px; font-weight: 400;
+  text-transform: none; letter-spacing: 0;
+}
+.sb-table {
+  width: 100%; border-collapse: collapse;
+  background: #16263a; border: 1px solid #264168; border-radius: 6px;
+  overflow: hidden; font-size: 11px;
+}
+.sb-table th {
+  background: #1c3150; color: #8aa0b6; font-weight: 600;
+  text-align: left; padding: 5px 6px; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+.sb-table td {
+  padding: 4px 6px; border-top: 1px solid #1f3149;
+  color: #dbe7f3; font-variant-numeric: tabular-nums;
+}
+.sb-table td.sb-place { font-weight: 600; width: 24px; text-align: right; }
+.sb-table td.sb-boat { color: #fff; font-weight: 500; }
+.sb-table td.sb-sail { color: #8aa0b6; font-size: 10px; }
+.sb-table td.sb-finish, .sb-table td.sb-elapsed { font-size: 10px; color: #b6c6d6; }
+.sb-table tr.sb-self { background: rgba(110, 168, 255, 0.18); }
+.sb-table tr.sb-self td.sb-boat { color: #6ea8ff; }
+.sb-table tr.sb-dnx td { color: #8aa0b6; font-style: italic; }
+
+/* Wind shift sparkline */
+#windShift { margin-top: 12px; }
+#windShiftSvg {
+  width: 100%; height: 80px; background: #16263a;
+  border: 1px solid #264168; border-radius: 6px; display: block;
+}
+.ws-info { font-size: 10px; color: #8aa0b6; margin-top: 4px; }
+
+/* Race stats panel */
+#raceStats { margin-top: 12px; }
+.rs-body {
+  background: #16263a; border: 1px solid #264168; border-radius: 6px;
+  padding: 10px 12px;
+}
+.rs-section { margin-bottom: 10px; }
+.rs-section:last-child { margin-bottom: 0; }
+.rs-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: #8aa0b6; margin-bottom: 4px;
+}
+.rs-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px;
+  font-size: 12px; font-variant-numeric: tabular-nums; color: #dbe7f3;
+}
+.rs-grid .rs-k { color: #8aa0b6; }
+.rs-grid .rs-v { color: #fff; font-weight: 600; }
+.rs-grid .rs-bad { color: #f87171; }
+.rs-grid .rs-good { color: #6fd06b; }
+.rs-btn {
+  background: #1e3148; color: #dbe7f3; border: 1px solid #2d4661;
+  padding: 5px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;
+  margin-right: 4px; margin-top: 4px;
+}
+.rs-btn:hover { background: #274363; }
+
+/* Mark-rounding markers */
+.mark-icon {
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #fef3c7; color: #0f1924;
+  border: 2px solid #f59e0b; font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: -apple-system, Segoe UI, sans-serif;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+}
+
+/* Wind chip in sidebar */
+#wind { margin-top: 12px; }
+.wind-body {
+  background: #16263a; border: 1px solid #264168; border-radius: 6px;
+  padding: 10px 12px; display: flex; align-items: center; gap: 12px;
+}
+.wind-body .arrow {
+  width: 32px; height: 32px; flex: 0 0 32px;
+}
+.wind-body .nums { font-size: 13px; line-height: 1.35; }
+.wind-body .nums strong { color: #fff; font-weight: 600; }
+.wind-body .nums small { color: #8aa0b6; font-size: 11px; }
+
+/* Wind arrow on map (divIcon) */
+.wind-marker {
+  pointer-events: none;
+  font-family: inherit;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.5));
+}
+.wind-marker svg { display: block; overflow: visible; }
+.wind-marker .label {
+  position: absolute; top: 50%; left: 100%; transform: translate(8px, -50%);
+  background: rgba(15, 25, 36, 0.85); color: #fff; padding: 2px 6px;
+  border-radius: 4px; font-size: 11px; white-space: nowrap;
+  border: 1px solid #3b5470;
+}
+
+/* Interpolated wind-field grid (smaller, no label) */
+.wg-icon { width: 16px; height: 16px; pointer-events: none; }
+.wg-icon svg { width: 100%; height: 100%; display: block; }
+
+/* HKO wind-station markers on the map */
+.wm-icon { width: 28px; height: 28px; position: relative; }
+.wm-icon svg { width: 100%; height: 100%; display: block; }
+.wm-label {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 9px; font-weight: 700; color: #0f1924;
+  font-family: -apple-system, Segoe UI, sans-serif;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff;
+  pointer-events: none;
+}
+
+/* Boat-click popup — translucent so other boats stay visible behind */
+.leaflet-popup.boat-popup .leaflet-popup-content-wrapper {
+  background: rgba(15, 25, 36, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  color: #fff;
+}
+.leaflet-popup.boat-popup .leaflet-popup-tip {
+  background: rgba(15, 25, 36, 0.55);
+  box-shadow: none;
+}
+.leaflet-popup.boat-popup .leaflet-popup-content {
+  margin: 8px 10px;
+  font-size: 12px;
+}
+.leaflet-popup.boat-popup a.leaflet-popup-close-button {
+  color: #cbd5e1;
+}
+
+/* Boat cursor styling */
+.boat-icon {
+  width: 18px; height: 18px; position: relative; pointer-events: auto;
+}
+.boat-icon svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.boat-icon .hull {
+  transition: filter 0.15s;
+}
+.boat-icon.selected .hull {
+  filter: drop-shadow(0 0 6px #fff) drop-shadow(0 0 10px #6ea8ff);
+}
+
+.footer { margin-top: 16px; font-size: 10px; color: #536576; }
+.footer a { color: #8aa0b6; }

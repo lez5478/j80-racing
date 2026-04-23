@@ -1,0 +1,16 @@
+{
+  "name": "sailing-tracks",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first replay tool for J/80 races at RHKYC, with VTK track parsing, race trimming and OpenSeaMap overlay.",
+  "scripts": {
+    "start": "node start.cjs",
+    "fetch": "node race-results/fetch.js",
+    "parse": "node race-results/parse.js",
+    "scan": "node scan-records.js",
+    "build": "node race-results/fetch.js && node race-results/parse.js && node scan-records.js"
+  },
+  "dependencies": {
+    "pdf-parse": "^1.1.1"
+  }
+}
