@@ -5,6 +5,55 @@ body { display: flex; }
   background: #0f1924; color: #dbe7f3; padding: 16px 18px; box-sizing: border-box;
   border-right: 1px solid #1f2d3d;
 }
+
+/* ---------- Mobile ---------- */
+/* Hamburger + scrim shown only on small/touch screens. Sidebar becomes a
+   slide-in drawer; map uses the full viewport. */
+#sidebarToggle, #sidebarScrim { display: none; }
+@media (max-width: 768px), (pointer: coarse) {
+  body { display: block; }
+  #map {
+    width: 100vw !important; height: 100vh !important;
+    position: absolute; top: 0; left: 0;
+  }
+  #sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0;
+    width: 85vw; max-width: 340px;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease-out;
+    z-index: 1001;
+    box-shadow: 4px 0 14px rgba(0, 0, 0, 0.5);
+  }
+  body.sidebar-open #sidebar { transform: translateX(0); }
+  #sidebarToggle {
+    display: flex; align-items: center; justify-content: center;
+    position: fixed; top: 10px; left: 10px; z-index: 1002;
+    width: 42px; height: 42px; padding: 0;
+    background: rgba(15, 25, 36, 0.92); color: #dbe7f3;
+    border: 1px solid #264168; border-radius: 8px;
+    font-size: 20px; cursor: pointer;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  body.sidebar-open #sidebarToggle { left: calc(85vw + 10px); }
+  #sidebarScrim {
+    display: block;
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0, 0, 0, 0.4);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease-out;
+  }
+  body.sidebar-open #sidebarScrim {
+    opacity: 1; pointer-events: auto;
+  }
+  #playbar { left: 14px !important; }
+
+  /* Slightly larger tap targets */
+  .pb-btn { width: 40px; height: 40px; font-size: 16px; }
+  #pbSpeed { padding: 6px 8px; font-size: 14px; }
+  .race-tab { padding: 8px 12px; font-size: 13px; }
+  .days-picker { padding: 10px 12px; font-size: 15px; }
+}
 #sidebar h1 { font-size: 18px; margin: 0 0 6px; letter-spacing: 0.3px; }
 .hint { font-size: 12px; color: #8aa0b6; margin: 0 0 10px; }
 #map { flex: 1; height: 100vh; }
