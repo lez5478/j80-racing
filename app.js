@@ -2244,6 +2244,25 @@ class RemoteVtkFile {
   }
 }
 
+// Live wind: fetch the latest timeseries from the Worker (rebuilt by the
+// weekend cron job) and replace whatever was committed in timeseries.js.
+// Falls back silently if the endpoint isn't available (local dev).
+async function loadLiveWind() {
+  try {
+    const r = await fetch("/api/wind", { cache: "no-store" });
+    if (!r.ok) return;
+    const data = await r.json();
+    if (data && data.hourly && Object.keys(data.hourly).length) {
+      window.WIND_HOURLY = data.hourly;
+      if (data.stations && Object.keys(data.stations).length) {
+        window.WIND_STATIONS = data.stations;
+        populateStationDropdown();
+      }
+    }
+  } catch { /* offline or local dev */ }
+}
+loadLiveWind();
+
 // Load the day index. In production we try the live /api/records Worker
 // endpoint first (reflects any freshly-uploaded VTK immediately); if that
 // 404s (local dev via http-server) we fall back to the records.js manifest

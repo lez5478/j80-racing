@@ -18,5 +18,10 @@
       "binding": "SAIL_RECORDS",
       "bucket_name": "sail-records"
     }
-  ]
+  ],
+  "triggers": {
+    "crons": [
+      "0 * * * 6,0"
+    ]
+  }
 }

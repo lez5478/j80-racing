@@ -1,18 +1,14 @@
 // Cloudflare Worker for the J/80 Racing app.
 //
 //   GET  /api/records     → live listing of R2 → { Boat: { date: [url, …] } }
+//   GET  /api/wind        → live hourly wind timeseries built from R2
 //   POST /api/upload      → multipart: boat, date, filename, file
 //                           writes R2 at <Boat>/<date>/<filename>
 //   everything else       → static assets (index.html, app.js, …)
 //
-// No auth, no tokens — whoever has the upload page URL can contribute.
-// That's the chosen security model ("any sailor picks boat from dropdown").
-//
-// Safety rails applied on upload:
-//   · filename must match SESSION_*.VTK
-//   · boat must match ^[A-Za-z0-9 '._-]{1,32}$ (no path traversal)
-//   · date must be YYYY-MM-DD
-//   · file size ≤ 30 MB (Velocitek VTKs are ~1-2 MB — 30 is plenty)
+//   scheduled()           → runs hourly Sat/Sun UTC → pulls past-6h HKO wind
+//                           text snapshots into R2 under wind-text/<date>/<HH>.txt,
+//                           then rebuilds the aggregated timeseries blob.
 
 const BOAT_RE = /^[A-Za-z0-9 '._-]{1,32}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -32,39 +28,138 @@ function json(body, init = {}) {
   });
 }
 
+// ---------- HKO wind ----------
+const HKO_ARCHIVE = "https://www.hko.gov.hk/dps/wxinfo/ts/tsarchive/text_readings_";
+const DIR_DEG = {
+  "North": 0, "Northeast": 45, "East": 90, "Southeast": 135,
+  "South": 180, "Southwest": 225, "West": 270, "Northwest": 315,
+};
+const WIND_ROW_RE = /^([A-Z][\w' ]+?)\s{2,}(N\/A|North|Northeast|East|Southeast|South|Southwest|West|Northwest|Variable)\s+(\d+|N\/A)\s+(\d+|N\/A)\s*$/;
+
+function parseHkoText(text) {
+  const plain = text.replace(/<[^>]+>/g, "");
+  const m = plain.match(/10-Minute Mean Wind Direction[^\n]*\n([\s\S]*?)\n\s*\n/);
+  if (!m) return null;
+  const rows = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const r = line.match(WIND_ROW_RE);
+    if (!r) continue;
+    rows[r[1].trim()] = {
+      dir: r[2] === "N/A" ? null : r[2],
+      deg: DIR_DEG[r[2]] ?? null,
+      spd: r[3] === "N/A" ? null : Number(r[3]),
+      gust: r[4] === "N/A" ? null : Number(r[4]),
+    };
+  }
+  return rows;
+}
+
+function pad(n) { return String(n).padStart(2, "0"); }
+
+// Fetch the HKO snapshot for a specific HKT hour and archive it in R2 if
+// it's not already there. Returns { saved | skipped | missing, key }.
+async function pullWindHour(env, y, m, d, h) {
+  const stamp = `${y}${pad(m)}${pad(d)}${pad(h)}0000`;
+  const key = `wind-text/${y}-${pad(m)}-${pad(d)}/${pad(h)}.txt`;
+  if (await env.SAIL_RECORDS.head(key)) return { skipped: true, key };
+  try {
+    const r = await fetch(`${HKO_ARCHIVE}${stamp}e.txt`);
+    if (!r.ok) return { missing: true, key, status: r.status };
+    const body = await r.arrayBuffer();
+    if (body.byteLength < 200) return { missing: true, key, status: "empty" };
+    await env.SAIL_RECORDS.put(key, body, {
+      httpMetadata: { contentType: "text/html; charset=utf-8" },
+    });
+    return { saved: true, key };
+  } catch (e) {
+    return { missing: true, key, error: String(e) };
+  }
+}
+
+// Walk every wind-text/* file in R2 and build a single timeseries JSON:
+//   { stations: { name: name }, hourly: { date: { station: [ {h,dir,deg,spd,gust} ] } } }
+// Also writes timeseries.json at the bucket root for the app to fetch.
+async function rebuildTimeseries(env) {
+  const hourly = {};
+  const stationsSeen = new Set();
+  let cursor;
+  let snapshots = 0;
+  do {
+    const list = await env.SAIL_RECORDS.list({
+      prefix: "wind-text/", cursor, limit: 1000,
+    });
+    for (const obj of list.objects) {
+      const parts = obj.key.split("/"); // wind-text / YYYY-MM-DD / HH.txt
+      if (parts.length !== 3) continue;
+      const date = parts[1];
+      const hm = parts[2].match(/^(\d{2})\.txt$/);
+      if (!DATE_RE.test(date) || !hm) continue;
+      const h = Number(hm[1]);
+      const body = await env.SAIL_RECORDS.get(obj.key);
+      if (!body) continue;
+      const text = await body.text();
+      const rows = parseHkoText(text);
+      if (!rows) continue;
+      snapshots++;
+      if (!hourly[date]) hourly[date] = {};
+      for (const [st, vals] of Object.entries(rows)) {
+        stationsSeen.add(st);
+        if (!hourly[date][st]) hourly[date][st] = [];
+        hourly[date][st].push({ h, ...vals });
+      }
+    }
+    cursor = list.truncated ? list.cursor : null;
+  } while (cursor);
+
+  for (const d of Object.keys(hourly)) {
+    for (const s of Object.keys(hourly[d])) hourly[d][s].sort((a, b) => a.h - b.h);
+  }
+  const stations = {};
+  for (const s of [...stationsSeen].sort()) stations[s] = s;
+  const out = { stations, hourly };
+  await env.SAIL_RECORDS.put("timeseries.json", JSON.stringify(out), {
+    httpMetadata: { contentType: "application/json" },
+  });
+  return { days: Object.keys(hourly).length, stations: stationsSeen.size, snapshots };
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-
-    // CORS preflight
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: CORS_HEADERS });
-    }
+    if (request.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS });
 
     // ---------- GET /api/records ----------
-    // Walks the R2 bucket and returns the same shape as the local
-    // records.js generator. Called by the app at startup; replaces the
-    // baked-in records.js as soon as this endpoint is live.
     if (url.pathname === "/api/records" && request.method === "GET") {
       const records = {};
       let cursor;
       do {
         const list = await env.SAIL_RECORDS.list({ cursor, limit: 1000 });
         for (const obj of list.objects) {
-          // Key layout: Boat/YYYY-MM-DD/SESSION_*.VTK
+          // Only entries that look like Boat/YYYY-MM-DD/SESSION_*.VTK.
           const parts = obj.key.split("/");
           if (parts.length !== 3) continue;
           const [boat, date, name] = parts;
           if (!BOAT_RE.test(boat) || !DATE_RE.test(date) || !FILE_RE.test(name)) continue;
           records[boat] = records[boat] || {};
           records[boat][date] = records[boat][date] || [];
-          // Path kept in "Sail records/…" form so the existing RemoteVtkFile
-          // rewriter swaps it for the R2 public URL.
           records[boat][date].push(`Sail records/${obj.key}`);
         }
         cursor = list.truncated ? list.cursor : null;
       } while (cursor);
       return json(records);
+    }
+
+    // ---------- GET /api/wind ----------
+    if (url.pathname === "/api/wind" && request.method === "GET") {
+      const blob = await env.SAIL_RECORDS.get("timeseries.json");
+      if (!blob) return json({ stations: {}, hourly: {} });
+      return new Response(blob.body, {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "public, max-age=300",
+          ...CORS_HEADERS,
+        },
+      });
     }
 
     // ---------- POST /api/upload ----------
@@ -96,7 +191,54 @@ export default {
       return json({ ok: true, key, bytes: file.size });
     }
 
-    // Fallback → serve static assets.
+    // ---------- GET /api/refresh-wind ----------
+    // Manual trigger to pull the last 24h + rebuild. Useful when you add a
+    // new weekend retroactively. Public; no auth — worst case someone
+    // forces a rebuild, which is fine.
+    if (url.pathname === "/api/refresh-wind" && request.method === "GET") {
+      const hours = Math.min(48, Math.max(1, Number(url.searchParams.get("hours") || 24)));
+      const now = new Date();
+      const hk = new Date(now.getTime() + 8 * 3600 * 1000);
+      const results = [];
+      for (let i = 0; i < hours; i++) {
+        const cur = new Date(hk.getTime() - i * 3600 * 1000);
+        results.push(await pullWindHour(env,
+          cur.getUTCFullYear(), cur.getUTCMonth() + 1, cur.getUTCDate(), cur.getUTCHours()));
+      }
+      const summary = await rebuildTimeseries(env);
+      return json({ pulled: results.filter((r) => r.saved).length,
+                    skipped: results.filter((r) => r.skipped).length,
+                    missing: results.filter((r) => r.missing).length,
+                    ...summary });
+    }
+
     return env.ASSETS.fetch(request);
+  },
+
+  // Cloudflare runs this on the cron schedule in wrangler.jsonc:
+  //   "0 * * * 6,0"  = every hour on Saturday(6) and Sunday(0) UTC
+  // which in HKT (UTC+8) lines up with:
+  //   Sat 08:00 HKT → Sun 07:00 HKT, and Sun 08:00 HKT → Mon 07:00 HKT
+  // i.e. hourly through both full race days.
+  async scheduled(event, env, ctx) {
+    const now = new Date(event.scheduledTime);
+    const hk = new Date(now.getTime() + 8 * 3600 * 1000);
+    // Backfill the past 6 hours in case earlier triggers missed (Cloudflare
+    // occasionally coalesces overlapping runs). HKO's endpoint only keeps
+    // the last 24 hours anyway, so our window is tight.
+    const results = [];
+    for (let i = 0; i < 6; i++) {
+      const cur = new Date(hk.getTime() - i * 3600 * 1000);
+      results.push(await pullWindHour(env,
+        cur.getUTCFullYear(), cur.getUTCMonth() + 1, cur.getUTCDate(), cur.getUTCHours()));
+    }
+    const saved = results.filter((r) => r.saved).length;
+    // Only rebuild the big JSON if something new actually landed.
+    if (saved > 0) {
+      const summary = await rebuildTimeseries(env);
+      console.log(`Wind cron: saved ${saved}, timeseries has ${summary.days} days / ${summary.snapshots} snapshots`);
+    } else {
+      console.log("Wind cron: no new snapshots");
+    }
   },
 };
