@@ -1,0 +1,37 @@
+# Tell Cloudflare Workers Assets (wrangler) which paths NOT to serve.
+# Same syntax as .gitignore.
+
+# Pulled in by `npx wrangler deploy`, contains a 118 MiB binary that breaks upload.
+node_modules/
+
+# Never serve git internals.
+.git/
+
+# Node scripts are useful locally but aren't consumed by the browser.
+scan-records.js
+scan-startlines.js
+start.cjs
+race-results/fetch.js
+race-results/parse.js
+wind/fetch-text.js
+wind/scan-text.js
+wind/build-stations.js
+wind/build.js
+wind/register-task.ps1
+
+# Manifests / lockfiles / configs the browser doesn't need.
+package.json
+package-lock.json
+wrangler.jsonc
+.assetsignore
+.gitignore
+.claude/
+
+# Raw data inputs (if any accidentally stay in the repo).
+Sail records/
+race-results/20*/
+wind/text/
+wind/barbs/
+
+# Docs
+*.md
