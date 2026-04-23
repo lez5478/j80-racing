@@ -2195,11 +2195,21 @@ if (pickDir) pickDir.addEventListener("change", (e) => indexFiles(e.target.files
 //   { Boat: { "YYYY-MM-DD": ["Sail records/Boat/YYYY-MM-DD/SESSION_1.VTK", ...] } }
 // We wrap each URL in an object that quacks like a File (name,
 // webkitRelativePath, arrayBuffer()) so the existing pipeline handles it.
+//
+// Rewriting: when deployed, VTK files live in Cloudflare R2 at
+// R2_BASE_URL/Meltemi/<date>/SESSION_*.VTK. The manifest uses the
+// local-relative "Sail records/..." prefix so dev mode still works from
+// the http-server; RemoteVtkFile swaps the prefix at fetch time.
+const R2_BASE_URL = "https://pub-1aedaddf302345d592d9d1ffce4550bd.r2.dev";
 class RemoteVtkFile {
   constructor(url) {
-    this.url = url;
     this.name = url.split("/").pop();
-    this.webkitRelativePath = url; // path includes the YYYY-MM-DD segment
+    this.webkitRelativePath = url;   // path includes the YYYY-MM-DD segment
+    // "Sail records/Meltemi/..." → "<R2>/Meltemi/..." when the constant is set,
+    // or leave the relative path for local dev (http-server serves the folder).
+    this.url = R2_BASE_URL
+      ? url.replace(/^Sail records\//, R2_BASE_URL.replace(/\/$/, "") + "/")
+      : url;
   }
   async arrayBuffer() {
     const r = await fetch(encodeURI(this.url));
