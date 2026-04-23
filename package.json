@@ -8,9 +8,14 @@
     "fetch": "node race-results/fetch.js",
     "parse": "node race-results/parse.js",
     "scan": "node scan-records.js",
-    "build": "node race-results/fetch.js && node race-results/parse.js && node scan-records.js"
+    "build": "node race-results/fetch.js && node race-results/parse.js && node scan-records.js",
+    "deploy": "wrangler deploy",
+    "preview": "wrangler dev"
   },
   "dependencies": {
     "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "wrangler": "^4.84.1"
   }
 }
