@@ -1679,6 +1679,78 @@ if (exportRow) {
 // ---------- File loading (race-aware) ----------
 // loadFileAsPoints just parses VTK to {boat, points}; the caller decides
 // how to slice into per-race tracks.
+// ---------- GPX / TCX parser ----------
+// Garmin Connect and many watches export GPS tracks as GPX. Structure is
+// plain XML: <trkpt lat="…" lon="…"><time>…</time></trkpt>. Speed and
+// heading aren't usually included, so we compute them from consecutive
+// samples (works well at 1 Hz which is the typical Garmin rate).
+function parseGPX(text) {
+  const points = [];
+  const trkptRe = /<trkpt\s+lat="([-\d.]+)"\s+lon="([-\d.]+)"[^>]*>[\s\S]*?<time>([^<]+)<\/time>[\s\S]*?<\/trkpt>/g;
+  let m;
+  while ((m = trkptRe.exec(text))) {
+    const lat = Number(m[1]);
+    const lon = Number(m[2]);
+    const t = Date.parse(m[3]) / 1000;
+    if (!isFinite(lat) || !isFinite(lon) || !isFinite(t)) continue;
+    points.push({ t, lat, lon, sog: 0, cog: 0 });
+  }
+  if (points.length < 2) return { points, buttons: [] };
+  // Fill sog (knots) + cog (degrees) from adjacent samples.
+  const MPS_TO_KN = 1.943844;
+  for (let i = 0; i < points.length; i++) {
+    const a = i === 0 ? points[0] : points[i - 1];
+    const b = i === points.length - 1 ? points[points.length - 1] : points[i + 1];
+    const dLat = (b.lat - a.lat) * 111_320;
+    const dLon = (b.lon - a.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+    const dist = Math.sqrt(dLat * dLat + dLon * dLon);
+    const dt = Math.max(0.01, b.t - a.t);
+    points[i].sog = (dist / dt) * MPS_TO_KN;
+    points[i].cog = ((Math.atan2(dLon, dLat) * 180 / Math.PI) + 360) % 360;
+  }
+  return { points, buttons: [] };
+}
+
+// TCX (Garmin Training Center) is similar XML with <Trackpoint> wrapping
+// <Time>, <Position><LatitudeDegrees/LongitudeDegrees>, and sometimes
+// <Extensions> carrying speed. Same post-processing for sog/cog.
+function parseTCX(text) {
+  const points = [];
+  const pointRe = /<Trackpoint>[\s\S]*?<Time>([^<]+)<\/Time>[\s\S]*?<LatitudeDegrees>([-\d.]+)<\/LatitudeDegrees>[\s\S]*?<LongitudeDegrees>([-\d.]+)<\/LongitudeDegrees>[\s\S]*?<\/Trackpoint>/g;
+  let m;
+  while ((m = pointRe.exec(text))) {
+    const t = Date.parse(m[1]) / 1000;
+    const lat = Number(m[2]);
+    const lon = Number(m[3]);
+    if (!isFinite(lat) || !isFinite(lon) || !isFinite(t)) continue;
+    points.push({ t, lat, lon, sog: 0, cog: 0 });
+  }
+  // Same sog/cog fill as parseGPX — no duplication for brevity; reuse:
+  if (points.length < 2) return { points, buttons: [] };
+  const MPS_TO_KN = 1.943844;
+  for (let i = 0; i < points.length; i++) {
+    const a = i === 0 ? points[0] : points[i - 1];
+    const b = i === points.length - 1 ? points[points.length - 1] : points[i + 1];
+    const dLat = (b.lat - a.lat) * 111_320;
+    const dLon = (b.lon - a.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+    const dist = Math.sqrt(dLat * dLat + dLon * dLon);
+    const dt = Math.max(0.01, b.t - a.t);
+    points[i].sog = (dist / dt) * MPS_TO_KN;
+    points[i].cog = ((Math.atan2(dLon, dLat) * 180 / Math.PI) + 360) % 360;
+  }
+  return { points, buttons: [] };
+}
+
+// Dispatch by file extension.
+function parseTrackFile(name, bytes) {
+  const ext = name.toLowerCase().split(".").pop();
+  if (ext === "vtk") return parseVTK(bytes);
+  const text = new TextDecoder("utf-8").decode(bytes);
+  if (ext === "gpx") return parseGPX(text);
+  if (ext === "tcx") return parseTCX(text);
+  throw new Error(`Unsupported file format: .${ext}`);
+}
+
 // ---------- IndexedDB cache for parsed VTKs ----------
 // Re-parsing 70 MB of protobuf on every day-switch is wasteful. Cache the
 // parsed { points, buttons } per file URL + size so repeat loads are
@@ -1732,8 +1804,7 @@ async function loadFileAsPoints(file) {
   }
 
   const buf = new Uint8Array(await file.arrayBuffer());
-  const { points, buttons } = parseVTK(buf);
-  // Fire-and-forget save; don't block the caller.
+  const { points, buttons } = parseTrackFile(file.name, buf);
   vtkCachePut(cacheKey, { boat, points, buttons, savedAt: Date.now() });
   return { boat, points, buttons, rel };
 }
@@ -1754,6 +1825,9 @@ function dayKeyFor(file) {
   }
   return null;
 }
+
+// Also extend the VTK filter on the client side — accept GPX / TCX too.
+// indexFiles checks file.name regex so add a permissive pattern.
 
 function isRaceDay(key) {
   return !!(window.RACES && window.RACES[key] && window.RACES[key].length);
@@ -2150,7 +2224,7 @@ function sliceByTime(points, t0, t1) {
 }
 
 function indexFiles(fileList) {
-  const files = Array.from(fileList).filter((f) => /\.vtk$/i.test(f.name));
+  const files = Array.from(fileList).filter((f) => /\.(vtk|gpx|tcx)$/i.test(f.name));
   if (!files.length) {
     statusEl.textContent = "No .VTK files found.";
     return;

@@ -67,7 +67,7 @@
 
 <div id="drop">
   <strong>Drop VTK files here</strong><br>or click to pick
-  <input type="file" id="pickFiles" accept=".vtk,.VTK" multiple hidden>
+  <input type="file" id="pickFiles" accept=".vtk,.VTK,.gpx,.GPX,.tcx,.TCX,.fit,.FIT" multiple hidden>
 </div>
 
 <div id="log"></div>
@@ -87,12 +87,17 @@ function log(msg, cls = "") {
   return row;
 }
 
-// Parse just the first Trackpoint from a VTK blob to read its epoch timestamp
-// → YYYY-MM-DD in Hong Kong time.
+function hkDate(epochSec) {
+  const hk = new Date((epochSec + 8 * 3600) * 1000);
+  const y = hk.getUTCFullYear();
+  const m = String(hk.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(hk.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// Read the first Velocitek Trackpoint from a VTK binary → HKT date.
 async function dateFromVtk(file) {
   const head = new Uint8Array(await file.slice(0, 512).arrayBuffer());
-  // Record stream: u16 LE len + proto bytes. First record is often a
-  // HardwareDescription — skip and scan for a trackpoint (field 1, wiretype 2).
   let i = 0;
   while (i + 2 < head.length) {
     const len = head[i] | (head[i + 1] << 8);
@@ -100,27 +105,49 @@ async function dateFromVtk(file) {
     if (!len || i + len > head.length) break;
     const msg = head.subarray(i, i + len);
     i += len;
-    // Peek: field 1 wiretype 2 → opening byte 0x0a
     if (msg[0] === 0x0a) {
-      // Trackpoint submessage follows. Skip 1-byte length, then read
-      // field 1 (seconds) varint.
       let p = 1;
-      // length varint
       let shift = 0, subLen = 0, b;
       do { b = msg[p++]; subLen |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
-      // Now p points into submessage
-      // Expect tag 0x08 (field 1, wiretype 0) = seconds
       if (msg[p++] === 0x08) {
         let sec = 0; shift = 0;
         do { b = msg[p++]; sec |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
-        const hk = new Date((sec + 8 * 3600) * 1000);
-        const y = hk.getUTCFullYear();
-        const m = String(hk.getUTCMonth() + 1).padStart(2, "0");
-        const d = String(hk.getUTCDate()).padStart(2, "0");
-        return `${y}-${m}-${d}`;
+        return hkDate(sec);
       }
     }
   }
+  return null;
+}
+
+// Read the first <time>…</time> from a GPX/TCX/XML track.
+async function dateFromXml(file) {
+  // Most GPX/TCX files are < 1 MB and fit comfortably; read the whole file.
+  const text = await file.text();
+  const m = text.match(/<time>([^<]+)<\/time>/i) || text.match(/<Time>([^<]+)<\/Time>/);
+  if (!m) return null;
+  const sec = Date.parse(m[1]) / 1000;
+  if (!isFinite(sec)) return null;
+  return hkDate(sec);
+}
+
+// Read a FIT file's earliest timestamp. FIT is a binary format — we skip
+// the detail and let the server accept it; use the file's lastModified as
+// a fallback date. Fleet members with FIT files can fix by uploading the
+// GPX export instead (Garmin Connect can export both).
+function dateFromFit(file) {
+  const d = new Date(file.lastModified || Date.now());
+  const hk = new Date(d.getTime() + 8 * 3600 * 1000);
+  const y = hk.getUTCFullYear();
+  const m = String(hk.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(hk.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+async function dateFromFile(file) {
+  const ext = file.name.toLowerCase().split(".").pop();
+  if (ext === "vtk") return dateFromVtk(file);
+  if (ext === "gpx" || ext === "tcx") return dateFromXml(file);
+  if (ext === "fit") return dateFromFit(file);
   return null;
 }
 
@@ -128,14 +155,16 @@ async function uploadOne(file) {
   const row = log(`${file.name} …`, "progress");
   const boat = boatEl.value;
   let date;
-  try { date = await dateFromVtk(file); }
-  catch (e) { row.className = "row-log err"; row.textContent = `${file.name} — couldn't read date from VTK`; return; }
-  if (!date) { row.className = "row-log err"; row.textContent = `${file.name} — no trackpoints found`; return; }
+  try { date = await dateFromFile(file); }
+  catch (e) { row.className = "row-log err"; row.textContent = `${file.name} — couldn't read date: ${e.message}`; return; }
+  if (!date) { row.className = "row-log err"; row.textContent = `${file.name} — no timestamp found in file`; return; }
 
+  // VTK historically uppercase; keep GPX/TCX/FIT as-is.
+  const keepCaseName = /\.vtk$/i.test(file.name) ? file.name.toUpperCase() : file.name;
   const fd = new FormData();
   fd.append("boat", boat);
   fd.append("date", date);
-  fd.append("filename", file.name.toUpperCase());
+  fd.append("filename", keepCaseName);
   fd.append("file", file);
 
   try {
@@ -155,9 +184,9 @@ async function uploadOne(file) {
 }
 
 async function handleFiles(files) {
-  const vtks = [...files].filter((f) => /\.vtk$/i.test(f.name));
-  if (!vtks.length) { log("No .VTK files", "err"); return; }
-  for (const f of vtks) await uploadOne(f);
+  const supported = [...files].filter((f) => /\.(vtk|gpx|tcx|fit)$/i.test(f.name));
+  if (!supported.length) { log("No .VTK / .GPX / .TCX / .FIT files", "err"); return; }
+  for (const f of supported) await uploadOne(f);
 }
 
 dropEl.addEventListener("click", () => pickEl.click());
