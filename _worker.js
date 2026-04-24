@@ -193,6 +193,39 @@ export default {
       return json({ ok: true, key, bytes: file.size });
     }
 
+    // ---------- POST /api/upload-wind-text ----------
+    // Accepts one wind-text snapshot (one hourly .txt). Used by the local
+    // sync script to push historical snapshots that pre-date the cron
+    // (HKO only keeps 24h so we can't re-fetch them from their server).
+    //   fields: date (YYYY-MM-DD), hour (0-23), file
+    if (url.pathname === "/api/upload-wind-text" && request.method === "POST") {
+      let form;
+      try { form = await request.formData(); }
+      catch { return json({ error: "multipart expected" }, { status: 400 }); }
+      const date = (form.get("date") || "").trim();
+      const hour = Number(form.get("hour"));
+      const file = form.get("file");
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      if (!Number.isInteger(hour) || hour < 0 || hour > 23)
+        return json({ error: "bad hour" }, { status: 400 });
+      if (!file || typeof file === "string")
+        return json({ error: "no file" }, { status: 400 });
+      if (file.size > 1024 * 1024) return json({ error: "too large" }, { status: 413 });
+      const key = `wind-text/${date}/${String(hour).padStart(2, "0")}.txt`;
+      await env.SAIL_RECORDS.put(key, file.stream(), {
+        httpMetadata: { contentType: "text/html; charset=utf-8" },
+      });
+      return json({ ok: true, key });
+    }
+
+    // ---------- GET /api/rebuild-wind ----------
+    // Re-aggregate everything in wind-text/ into timeseries.json.
+    // Use after bulk-uploading historical snapshots.
+    if (url.pathname === "/api/rebuild-wind" && request.method === "GET") {
+      const summary = await rebuildTimeseries(env);
+      return json(summary);
+    }
+
     // ---------- GET /api/refresh-wind ----------
     // Manual trigger to pull the last 24h + rebuild. Useful when you add a
     // new weekend retroactively. Public; no auth — worst case someone
