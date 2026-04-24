@@ -316,7 +316,12 @@ function addTrack(name, points, meta = {}) {
   const latlngs = points.map((p) => [p.lat, p.lon]);
   // Trail polyline starts EMPTY — points are appended as the race clock
   // advances so you actually watch the boat draw its track during playback.
-  const line = L.polyline([latlngs[0]], { color, weight: 3, opacity: 0.9 });
+  // Dotted style (round caps + zero-length dashes) so the underlying map
+  // and other boats' tracks stay readable behind it.
+  const line = L.polyline([latlngs[0]], {
+    color, weight: 3, opacity: 0.95,
+    dashArray: "6 5",
+  });
   const start = L.circleMarker(latlngs[0], {
     radius: 5, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1,
   }).bindTooltip(`Start: ${name}`);
@@ -2326,12 +2331,16 @@ async function loadLiveWind() {
     const r = await fetch("/api/wind", { cache: "no-store" });
     if (!r.ok) return;
     const data = await r.json();
-    if (data && data.hourly && Object.keys(data.hourly).length) {
-      window.WIND_HOURLY = data.hourly;
-      if (data.stations && Object.keys(data.stations).length) {
-        window.WIND_STATIONS = data.stations;
-        populateStationDropdown();
-      }
+    // MERGE rather than replace: the baked timeseries.js holds historical
+    // days (e.g. last weekend's race) that /api/wind doesn't cover because
+    // HKO's archive only keeps 24 hours and the cron hadn't started yet.
+    // Live data wins per-date; older committed dates stay.
+    if (data && data.hourly) {
+      window.WIND_HOURLY = { ...(window.WIND_HOURLY || {}), ...data.hourly };
+    }
+    if (data && data.stations && Object.keys(data.stations).length) {
+      window.WIND_STATIONS = { ...(window.WIND_STATIONS || {}), ...data.stations };
+      populateStationDropdown();
     }
   } catch { /* offline or local dev */ }
 }
