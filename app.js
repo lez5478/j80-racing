@@ -1295,6 +1295,17 @@ function renderRaceStats(track) {
   raceStatsEl.hidden = false;
 
   // Start
+  const sanity = impliedStartCheck(track.meta?.race);
+  let sanityRow = "";
+  if (sanity.implied && sanity.n >= 2) {
+    const cls = Math.abs(sanity.deltaSec) <= 1 ? "rs-good"
+              : Math.abs(sanity.deltaSec) <= 60 ? "" : "rs-bad";
+    const agreePct = Math.round(sanity.agreement * 100);
+    const note = Math.abs(sanity.deltaSec) <= 1
+      ? `matches ${sanity.implied} (${agreePct}% boats agree)`
+      : `implied ${sanity.implied} (Δ ${fmtSec(sanity.deltaSec)}, ${agreePct}% agree)`;
+    sanityRow = `<span class="rs-k">Stated start</span><span class="rs-v ${cls}">${sanity.stated.slice(0,5)} · ${note}</span>`;
+  }
   if (stats.startLine) {
     const sl = stats.startLine;
     const lateClass = sl.ocs ? "rs-bad" : (sl.lateBy != null && sl.lateBy < 5 ? "rs-good" : "");
@@ -1302,9 +1313,10 @@ function renderRaceStats(track) {
       <span class="rs-k">Dist at gun</span><span class="rs-v">${sl.distAtGun.toFixed(0)} m</span>
       <span class="rs-k">SOG at gun</span><span class="rs-v">${sl.sogAtGun.toFixed(1)} kn</span>
       <span class="rs-k">Crossed line</span><span class="rs-v ${lateClass}">${sl.lateBy != null ? fmtSec(sl.lateBy) : "—"}${sl.ocs ? " (OCS!)" : ""}</span>
+      ${sanityRow}
     `;
   } else {
-    rsStartGrid.innerHTML = `<span class="rs-k" style="grid-column:1/3;">No start line pinged</span>`;
+    rsStartGrid.innerHTML = `<span class="rs-k" style="grid-column:1/3;">No start line pinged</span>${sanityRow}`;
   }
 
   // Maneuvers
@@ -1866,7 +1878,10 @@ function renderDayList() {
 function raceWindowsFor(date) {
   const races = (window.RACES?.[date] || []).slice()
     .sort((a, b) => a.start.localeCompare(b.start));
-  const PAD = 15 * 60; // 15 minutes
+  // Pre-race pad: 8 min — covers the start sequence (warning + prep gun).
+  // Post-race pad: 15 min — gives time after the last finisher to coast back.
+  const PRE_PAD = 8 * 60;
+  const POST_PAD = 15 * 60;
   const windows = races.map((r) => {
     const startSec = Date.parse(r.start) / 1000;
     const endSec = r.end ? Date.parse(r.end) / 1000 : startSec + 60 * 60;
@@ -1874,8 +1889,8 @@ function raceWindowsFor(date) {
       race: r,
       actualStart: startSec,
       actualEnd: endSec,
-      windowStart: startSec - PAD,
-      windowEnd: endSec + PAD,
+      windowStart: startSec - PRE_PAD,
+      windowEnd: endSec + POST_PAD,
     };
   });
   // Resolve overlaps: if A.windowEnd > B.windowStart, split at the midpoint
@@ -2116,6 +2131,43 @@ function detectMarkRoundings(points, raceStartSec, raceEndSec) {
     // 5-sec scans of the same true rounding don't all fire.
     lastT = t;
   }
+  return out;
+}
+
+// Sanity check on the printed J/80 Start time. Each finisher reports its
+// own finish + elapsed; subtracting gives an implied start for that boat.
+// If every boat agrees on the same implied start, that's the truth — and
+// it should match the printed start to the second. Discrepancies usually
+// mean the PDF printout was rounded or pulled from the postponed time.
+//
+// Returns { stated: "HH:MM:SS", implied: "HH:MM:SS" or null,
+//           impliedSecondsOfDay: number, deltaSec: number, agreement: 0..1 }
+// where agreement = fraction of finishers that share the median implied start.
+function impliedStartCheck(race) {
+  const out = { stated: null, implied: null, impliedSecondsOfDay: null,
+                deltaSec: null, agreement: 0, n: 0 };
+  if (!race) return out;
+  const stated = race.startH * 3600 + race.startM * 60;
+  out.stated = `${String(race.startH).padStart(2,"0")}:${String(race.startM).padStart(2,"0")}:00`;
+  const parts = (s) => s.split(":").map(Number);
+  const implied = [];
+  for (const f of race.finishers || []) {
+    const [fh, fm, fs] = parts(f.finish);
+    const [eh, em, es] = parts(f.elapsed);
+    const fSec = fh * 3600 + fm * 60 + fs;
+    const eSec = eh * 3600 + em * 60 + es;
+    if (eSec <= 0) continue;
+    implied.push(fSec - eSec);
+  }
+  if (!implied.length) return out;
+  implied.sort((a, b) => a - b);
+  const median = implied[Math.floor(implied.length / 2)];
+  const matching = implied.filter((s) => Math.abs(s - median) <= 1).length;
+  out.impliedSecondsOfDay = median;
+  out.implied = `${String(Math.floor(median / 3600)).padStart(2,"0")}:${String(Math.floor((median % 3600) / 60)).padStart(2,"0")}:${String(median % 60).padStart(2,"0")}`;
+  out.deltaSec = median - stated;
+  out.agreement = matching / implied.length;
+  out.n = implied.length;
   return out;
 }
 
