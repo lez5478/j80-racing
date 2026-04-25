@@ -251,6 +251,47 @@ body { display: flex; }
 }
 .ws-info { font-size: 10px; color: #8aa0b6; margin-top: 4px; }
 
+/* Legs table */
+#legs { margin-top: 12px; }
+.legs-table { width: 100%; border-collapse: collapse; font-size: 11px;
+  background: #16263a; border: 1px solid #264168; border-radius: 6px; overflow: hidden; }
+.legs-table th { background: #1c3150; color: #8aa0b6; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px; font-size: 10px;
+  padding: 5px 6px; text-align: left; }
+.legs-table td { padding: 4px 6px; border-top: 1px solid #1f3149;
+  color: #dbe7f3; font-variant-numeric: tabular-nums; }
+.legs-table .leg-beat { color: #6ea8ff; }
+.legs-table .leg-run { color: #fb923c; }
+.legs-table .leg-reach { color: #facc15; }
+
+/* Maneuvers table */
+#maneuvers { margin-top: 12px; }
+.man-count { color: #8aa0b6; font-size: 11px; font-weight: 400;
+  text-transform: none; letter-spacing: 0; }
+.man-table { width: 100%; border-collapse: collapse; font-size: 10px;
+  background: #16263a; border: 1px solid #264168; border-radius: 6px; overflow: hidden; }
+.man-table th { background: #1c3150; color: #8aa0b6; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.4px; font-size: 9px;
+  padding: 4px 5px; text-align: left; }
+.man-table td { padding: 3px 5px; border-top: 1px solid #1f3149;
+  color: #dbe7f3; font-variant-numeric: tabular-nums; cursor: pointer; }
+.man-table tr:hover td { background: #1c3150; }
+.man-table .man-tack { color: #6ea8ff; }
+.man-table .man-gybe { color: #fb923c; }
+
+/* Polar plot */
+#polarPlot { margin-top: 12px; }
+#polarSvg { width: 100%; aspect-ratio: 1; background: #16263a;
+  border: 1px solid #264168; border-radius: 6px; display: block; }
+.pp-info { font-size: 10px; color: #8aa0b6; margin-top: 4px; }
+
+/* Gap chart */
+#gapChart { margin-top: 12px; }
+.gc-other { color: #facc15; font-weight: 600; }
+#gapSvg { width: 100%; height: 90px; background: #16263a;
+  border: 1px solid #264168; border-radius: 6px; display: block; }
+.gc-info { font-size: 10px; color: #8aa0b6; margin-top: 4px; }
+
 /* Race stats panel */
 #raceStats { margin-top: 12px; }
 .rs-body {

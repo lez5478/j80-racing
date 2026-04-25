@@ -47,6 +47,26 @@ Reader.prototype.skip = function (wire) {
 // Velocitek records the button type with no embedded position, so we tag
 // each event with the most recent trackpoint's lat/lon/time.
 const BUTTON_NAMES = ["NONE", "RC", "PIN", "LINE_CLEARED", "MAX"];
+// Convert a (q1, q2, q3, q4) quaternion to heel (degrees, port −, starboard +)
+// and pitch (degrees, bow up + ). Velocitek's docs say the quaternion is
+// "relative to local magnetic north" but don't specify the axis convention;
+// what comes out empirically matches roll/pitch when treated as standard
+// (w, x, y, z) with z-up, x-forward.
+function quatToHeelPitch(q1, q2, q3, q4) {
+  // Treat q1=w (scalar), q2=x, q3=y, q4=z.
+  const w = q1, x = q2, y = q3, z = q4;
+  // Normalize defensively (Velocitek values should be unit but cheap to verify).
+  const n = Math.sqrt(w * w + x * x + y * y + z * z) || 1;
+  const W = w / n, X = x / n, Y = y / n, Z = z / n;
+  // Standard quaternion -> Euler (ZYX intrinsic):
+  //   roll  (φ) = atan2(2(WX + YZ), 1 - 2(X² + Y²))
+  //   pitch (θ) = asin( clamp(2(WY - ZX), -1, 1) )
+  const roll = Math.atan2(2 * (W * X + Y * Z), 1 - 2 * (X * X + Y * Y));
+  const pitchSin = Math.max(-1, Math.min(1, 2 * (W * Y - Z * X)));
+  const pitch = Math.asin(pitchSin);
+  return { heel: roll * 180 / Math.PI, pitch: pitch * 180 / Math.PI };
+}
+
 function parseVTK(uint8) {
   const points = [];
   const buttons = [];
@@ -68,6 +88,7 @@ function parseVTK(uint8) {
         // Trackpoint
         const tp = new Reader(r.bytes());
         let sec = 0, csec = 0, lat = null, lon = null, sog = 0, cog = 0;
+        let q1 = null, q2 = null, q3 = null, q4 = null;
         while (!tp.eof()) {
           const k2 = tp.varintNum();
           const f = k2 >>> 3, w = k2 & 7;
@@ -77,10 +98,19 @@ function parseVTK(uint8) {
           else if (f === 4 && w === 0) lon = tp.sint32() / 1e7;
           else if (f === 5 && w === 0) sog = tp.varintNum() / 10; // knots
           else if (f === 6 && w === 0) cog = tp.varintNum();       // degrees
+          else if (f === 7 && w === 0) q1 = tp.sint32() / 1000;
+          else if (f === 8 && w === 0) q2 = tp.sint32() / 1000;
+          else if (f === 9 && w === 0) q3 = tp.sint32() / 1000;
+          else if (f === 10 && w === 0) q4 = tp.sint32() / 1000;
           else tp.skip(w);
         }
         if (lat !== null && lon !== null) {
           const pt = { t: sec + csec / 100, lat, lon, sog, cog };
+          if (q1 !== null && q2 !== null && q3 !== null && q4 !== null) {
+            const orient = quatToHeelPitch(q1, q2, q3, q4);
+            pt.heel = orient.heel;
+            pt.pitch = orient.pitch;
+          }
           points.push(pt);
           lastTrack = pt;
         }
@@ -993,6 +1023,10 @@ function selectTrack(id) {
     scoreboardEl.hidden = true;
     raceStatsEl.hidden = true;
     windShiftEl.hidden = true;
+    legsEl.hidden = true;
+    maneuversEl.hidden = true;
+    polarPlotEl.hidden = true;
+    gapChartEl.hidden = true;
     markRoundingsLayer.clearLayers();
     ghostsLayer.clearLayers();
     return;
@@ -1010,6 +1044,14 @@ function selectTrack(id) {
   renderRaceStats(t);
   renderWindShift(t);
   setupGhostsForTrack(t);
+  // After renderRaceStats has built the analysis, also render legs / maneuvers
+  // / polar / gap. _activeAnalysis is set inside renderRaceStats.
+  if (_activeAnalysis && _activeAnalysis.trackId === t.id) {
+    renderLegs(_activeAnalysis.stats.legs);
+    renderManeuvers(_activeAnalysis.stats);
+    renderPolarPlot(_activeAnalysis.stats.polar);
+    renderGapChart(t);
+  }
 
   // If this track is tied to a race, show the race result row beneath
   // the live SOG/COG/time grid.
@@ -1248,6 +1290,164 @@ function openRaceReport(track, stats) {
   setTimeout(() => w.print(), 250);
 }
 
+// ---------- Legs / Maneuvers / Polar / Gap ----------
+const legsEl = document.getElementById("legs");
+const legsTbody = legsEl.querySelector("tbody");
+const maneuversEl = document.getElementById("maneuvers");
+const maneuversTbody = maneuversEl.querySelector("tbody");
+const maneuversCount = maneuversEl.querySelector(".man-count");
+const polarPlotEl = document.getElementById("polarPlot");
+const polarSvg = document.getElementById("polarSvg");
+const ppInfo = document.querySelector("#polarPlot .pp-info");
+const gapChartEl = document.getElementById("gapChart");
+const gapSvg = document.getElementById("gapSvg");
+const gcOther = document.querySelector("#gapChart .gc-other");
+const gcInfo = document.querySelector("#gapChart .gc-info");
+
+function fmtDuration(sec) {
+  if (!isFinite(sec) || sec < 0) return "—";
+  const m = Math.floor(sec / 60), s = Math.round(sec - m * 60);
+  return `${m}m${String(s).padStart(2, "0")}s`;
+}
+
+function renderLegs(legs) {
+  if (!legs || !legs.length) { legsEl.hidden = true; return; }
+  legsEl.hidden = false;
+  legsTbody.innerHTML = legs.map((l, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td class="leg-${l.type}">${l.type[0].toUpperCase() + l.type.slice(1)}</td>
+      <td>${(l.distM / 1852).toFixed(2)} nm</td>
+      <td>${fmtDuration(l.durationSec)}</td>
+      <td>${l.avgSog.toFixed(1)} kn</td>
+      <td>${l.tacks}/${l.gybes}</td>
+    </tr>`).join("");
+}
+
+function renderManeuvers(stats) {
+  const list = [
+    ...stats.tacks.map((m) => ({ ...m, type: "Tack" })),
+    ...stats.gybes.map((m) => ({ ...m, type: "Gybe" })),
+  ].sort((a, b) => a.t - b.t);
+  if (!list.length) { maneuversEl.hidden = true; return; }
+  maneuversEl.hidden = false;
+  maneuversCount.textContent = `(${stats.tacks.length} tacks, ${stats.gybes.length} gybes)`;
+  maneuversTbody.innerHTML = list.map((m, i) => `
+    <tr data-t="${m.t}" data-lat="${m.lat}" data-lon="${m.lon}">
+      <td>${i + 1}</td>
+      <td>${new Date(m.t * 1000).toLocaleTimeString().slice(0, 5)}</td>
+      <td class="man-${m.type.toLowerCase()}">${m.type}</td>
+      <td>${m.lostKn != null ? "−" + m.lostKn.toFixed(1) + " kn" : "—"}</td>
+      <td>${m.recoverySec != null ? m.recoverySec.toFixed(0) + "s" : "—"}</td>
+      <td>${m.heelBefore != null ? Math.abs(m.heelBefore).toFixed(0) + "°" : "—"}</td>
+    </tr>`).join("");
+  for (const tr of maneuversTbody.querySelectorAll("tr")) {
+    tr.addEventListener("click", () => {
+      const t = Number(tr.dataset.t);
+      updateBoatsToRaceTime(t);
+      map.panTo([Number(tr.dataset.lat), Number(tr.dataset.lon)]);
+    });
+  }
+}
+
+function renderPolarPlot(polar) {
+  if (!polar) { polarPlotEl.hidden = true; return; }
+  const angles = Object.keys(polar).map(Number).sort((a, b) => a - b);
+  let totalCount = 0;
+  for (const a of angles) totalCount += polar[a].port.count + polar[a].stbd.count;
+  if (totalCount < 30) { polarPlotEl.hidden = true; return; }
+  polarPlotEl.hidden = false;
+  // Plot: angle (radial) maps to y-axis (top = wind), radius = SOG.
+  // Max SOG to scale to viewport (radius 100).
+  let maxSog = 0;
+  for (const a of angles) {
+    if (polar[a].port.maxSog > maxSog) maxSog = polar[a].port.maxSog;
+    if (polar[a].stbd.maxSog > maxSog) maxSog = polar[a].stbd.maxSog;
+  }
+  maxSog = Math.max(6, Math.ceil(maxSog));
+  const r = (sog) => (sog / maxSog) * 100;
+  const xy = (twa, sog, side) => {
+    const sign = side === "stbd" ? 1 : -1;
+    const rad = (twa * Math.PI / 180) * sign;
+    return [Math.sin(rad) * r(sog), -Math.cos(rad) * r(sog)];
+  };
+  // Background rings
+  const rings = [2, 4, 6, 8].filter((s) => s <= maxSog).map((s) =>
+    `<circle cx="0" cy="0" r="${r(s)}" fill="none" stroke="#264168" stroke-width="0.5"/>`).join("");
+  // Wind axis (vertical)
+  const axes = `
+    <line x1="0" y1="-105" x2="0" y2="105" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
+    <line x1="-105" y1="0" x2="105" y2="0" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
+    <text x="0" y="-100" text-anchor="middle" fill="#8aa0b6" font-size="7">WIND</text>`;
+  // J/80 polar target curve at 12 kn TWS as reference
+  const target = angles.map((a) => xy(a, polarSpeed(12, a), "stbd"))
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
+  const targetMirror = angles.map((a) => xy(a, polarSpeed(12, a), "port"))
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
+  // Your max-SOG curve, both sides
+  const yours = (side) => angles.map((a) => xy(a, polar[a][side].maxSog || 0, side))
+    .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
+  // Dots: each TWA-bin's average SOG
+  const dots = [];
+  for (const a of angles) {
+    for (const side of ["port", "stbd"]) {
+      const b = polar[a][side];
+      if (!b.count) continue;
+      const avg = b.sumSog / b.count;
+      const [x, y] = xy(a, avg, side);
+      dots.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${Math.min(5, 1.5 + Math.sqrt(b.count) / 4).toFixed(1)}" fill="#6ea8ff" opacity="0.7"/>`);
+    }
+  }
+  polarSvg.innerHTML = `
+    ${rings}${axes}
+    <path d="${target}" fill="none" stroke="#facc15" stroke-width="0.7" stroke-dasharray="3 2" opacity="0.7"/>
+    <path d="${targetMirror}" fill="none" stroke="#facc15" stroke-width="0.7" stroke-dasharray="3 2" opacity="0.7"/>
+    <path d="${yours("stbd")}" fill="none" stroke="#6fd06b" stroke-width="1.2" opacity="0.85"/>
+    <path d="${yours("port")}" fill="none" stroke="#6fd06b" stroke-width="1.2" opacity="0.85"/>
+    ${dots.join("")}
+  `;
+  ppInfo.innerHTML = `<span style="color:#6fd06b;">●</span> your max SOG &nbsp; <span style="color:#facc15;">--</span> J/80 polar @ 12 kn TWS`;
+}
+
+// Gap chart vs another visible track in the SAME race window. Picks the
+// first non-self visible track as the comparison; can be expanded later
+// to a chooser.
+function renderGapChart(myTrack) {
+  const others = tracks.filter((t) =>
+    !t.removed && t.visible && t.id !== myTrack.id &&
+    t.meta?.race?.name === myTrack.meta?.race?.name &&
+    t.meta?.boat !== myTrack.meta?.boat);
+  if (!others.length) { gapChartEl.hidden = true; return; }
+  const other = others[0];
+  // Use the average of the START LINE midpoint as ref, or first point.
+  const ref = myTrack.meta?.startMarks?.rc && myTrack.meta?.startMarks?.pin
+    ? { lat: (myTrack.meta.startMarks.rc.lat + myTrack.meta.startMarks.pin.lat) / 2,
+        lon: (myTrack.meta.startMarks.rc.lon + myTrack.meta.startMarks.pin.lon) / 2 }
+    : myTrack.points[0];
+  const series = timeGapSeries(myTrack, other, ref);
+  if (series.length < 5) { gapChartEl.hidden = true; return; }
+  gapChartEl.hidden = false;
+  gcOther.textContent = other.meta?.boat || other.name;
+  const t0 = series[0].t, t1 = series[series.length - 1].t;
+  const maxAbs = Math.max(10, ...series.map((s) => Math.abs(s.gap)));
+  const W = 300, H = 80, midY = H / 2;
+  const xOf = (t) => ((t - t0) / (t1 - t0)) * W;
+  const yOf = (g) => midY - (g / maxAbs) * (H / 2 - 5);
+  const path = series.map((s, i) =>
+    `${i === 0 ? "M" : "L"}${xOf(s.t).toFixed(1)},${yOf(s.gap).toFixed(1)}`).join("");
+  // Shade above (gain) green, below (loss) red.
+  gapSvg.innerHTML = `
+    <line x1="0" y1="${midY}" x2="${W}" y2="${midY}" stroke="#475569" stroke-dasharray="2 3" stroke-width="0.5"/>
+    <path d="${path}" stroke="#6ea8ff" stroke-width="1.4" fill="none"/>
+    <text x="2" y="10" fill="#6fd06b" font-size="9">+${maxAbs.toFixed(0)}s ahead</text>
+    <text x="2" y="${H - 2}" fill="#f87171" font-size="9">−${maxAbs.toFixed(0)}s behind</text>
+  `;
+  const final = series[series.length - 1].gap;
+  gcInfo.textContent = final > 0
+    ? `${myTrack.meta?.boat || "Me"} finished ${final.toFixed(0)}s ahead of ${other.meta?.boat || "them"}`
+    : `${myTrack.meta?.boat || "Me"} finished ${(-final).toFixed(0)}s behind ${other.meta?.boat || "them"}`;
+}
+
 // ---------- Race-stats sidebar panel ----------
 const raceStatsEl = document.getElementById("raceStats");
 const rsStartGrid = document.querySelector("#rsStart .rs-grid");
@@ -1335,9 +1535,13 @@ function renderRaceStats(track) {
   const polarClass = stats.avgPolarRatio == null ? "" :
                      (stats.avgPolarRatio >= 0.95 ? "rs-good" :
                       stats.avgPolarRatio < 0.75 ? "rs-bad" : "");
+  const heelRow = stats.heelStats
+    ? `<span class="rs-k">Heel (median/p90/max)</span><span class="rs-v">${stats.heelStats.median.toFixed(0)}° / ${stats.heelStats.p90.toFixed(0)}° / ${stats.heelStats.max.toFixed(0)}°</span>`
+    : "";
   rsPerfGrid.innerHTML = `
     <span class="rs-k">vs J/80 polar</span><span class="rs-v ${polarClass}">${polar}</span>
     <span class="rs-k">Max SOG</span><span class="rs-v">${track.maxSog.toFixed(1)} kn</span>
+    ${heelRow}
   `;
 
   // Plot mark roundings as numbered map circles.
@@ -2034,8 +2238,8 @@ function polarSpeed(twsKn, twaDeg) {
   return r1 + (r2 - r1) * fA;
 }
 
-// Detect tacks and gybes by walking the smoothed COG and finding
-// reversals through the wind axis (≥60° heading change).
+// Detect tacks and gybes, with per-maneuver telemetry (entry/min/exit
+// speed, recovery time to 90% of entry SOG, heel before vs during).
 function detectTacksGybes(points, windDeg) {
   const n = points.length;
   if (n < 12) return { tacks: [], gybes: [] };
@@ -2049,6 +2253,60 @@ function detectTacksGybes(points, windDeg) {
     }
     cog[i] = (Math.atan2(sx / c, sy / c) * 180 / Math.PI + 360) % 360;
   }
+
+  // Helper: average SOG / heel over a sample window centered around index i.
+  const avg = (i, windowSec, key) => {
+    const t0 = points[i].t - windowSec, t1 = points[i].t + windowSec;
+    let s = 0, c = 0;
+    for (const p of points) {
+      if (p.t < t0) continue;
+      if (p.t > t1) break;
+      const v = p[key];
+      if (typeof v === "number") { s += v; c++; }
+    }
+    return c ? s / c : null;
+  };
+
+  const enrich = (i, angle) => {
+    // Look back ~30 sec for entry SOG / heel.
+    const entrySog = avg(i, -30) ?? points[i].sog;
+    // Actually use a directional avg — last 30s before, next 30s after:
+    const t = points[i].t;
+    const range = (a, b, key) => {
+      let s = 0, c = 0;
+      for (const p of points) {
+        if (p.t < t + a) continue;
+        if (p.t > t + b) break;
+        const v = p[key];
+        if (typeof v === "number") { s += v; c++; }
+      }
+      return c ? s / c : null;
+    };
+    const entry = range(-30, -5, "sog") ?? points[i].sog;
+    const exit = range(5, 30, "sog") ?? points[i].sog;
+    // Find local SOG minimum within ±15s of the maneuver center.
+    let minSog = Infinity, minIdx = i;
+    for (const p of points) {
+      if (p.t < t - 15) continue;
+      if (p.t > t + 15) break;
+      if (p.sog < minSog) { minSog = p.sog; minIdx = points.indexOf(p); }
+    }
+    // Recovery: time after the minimum until SOG ≥ 90% of entry.
+    const target = entry * 0.9;
+    let recoveryT = null;
+    for (let j = minIdx; j < points.length && points[j].t < t + 60; j++) {
+      if (points[j].sog >= target) { recoveryT = points[j].t - points[minIdx].t; break; }
+    }
+    const heelBefore = range(-30, -5, "heel");
+    const heelAfter = range(5, 30, "heel");
+    return {
+      t, lat: points[i].lat, lon: points[i].lon, angle,
+      entrySog: entry, minSog, exitSog: exit, recoverySec: recoveryT,
+      lostKn: Math.max(0, entry - exit),
+      heelBefore, heelAfter,
+    };
+  };
+
   const tacks = [], gybes = [];
   let lastT = 0;
   for (let i = 5; i < n - 5; i++) {
@@ -2056,19 +2314,141 @@ function detectTacksGybes(points, windDeg) {
     if (delta > 180) delta -= 360; else if (delta < -180) delta += 360;
     if (Math.abs(delta) < 60) continue;
     if (points[i].t - lastT < 8) continue;
+    const ev = enrich(i, Math.abs(delta));
     if (windDeg != null) {
       let twa = cog[i - 5] - windDeg;
       while (twa > 180) twa -= 360;
       while (twa < -180) twa += 360;
-      (Math.abs(twa) < 90 ? tacks : gybes).push({
-        t: points[i].t, lat: points[i].lat, lon: points[i].lon, angle: Math.abs(delta),
-      });
+      (Math.abs(twa) < 90 ? tacks : gybes).push(ev);
     } else {
-      tacks.push({ t: points[i].t, lat: points[i].lat, lon: points[i].lon, angle: Math.abs(delta) });
+      tacks.push(ev);
     }
     lastT = points[i].t;
   }
   return { tacks, gybes };
+}
+
+// Split points into legs at each mark rounding. Returns:
+//   [{ name, tStart, tEnd, points, type: "beat"|"run"|"reach"|"transit",
+//      distM, durationSec, avgSog, vmg, polarRatio, tacks, gybes }]
+function buildLegs(points, marks, windDeg, polarFn, tacks, gybes) {
+  if (!points.length) return [];
+  const splits = [points[0].t, ...marks.map((m) => m.t), points[points.length - 1].t];
+  const legs = [];
+  for (let i = 0; i + 1 < splits.length; i++) {
+    const t0 = splits[i], t1 = splits[i + 1];
+    const slice = points.filter((p) => p.t >= t0 && p.t <= t1);
+    if (slice.length < 5) continue;
+    let dist = 0;
+    for (let j = 1; j < slice.length; j++) {
+      const a = slice[j - 1], b = slice[j];
+      const dLat = (b.lat - a.lat) * 111_320;
+      const dLon = (b.lon - a.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+      dist += Math.sqrt(dLat * dLat + dLon * dLon);
+    }
+    const duration = t1 - t0;
+    const avgSog = slice.reduce((s, p) => s + p.sog, 0) / slice.length;
+    // Average TWA over the leg → classify upwind/downwind/reach.
+    let twaSum = 0, twaN = 0;
+    if (windDeg != null) {
+      for (const p of slice) {
+        let twa = p.cog - windDeg;
+        while (twa > 180) twa -= 360;
+        while (twa < -180) twa += 360;
+        twaSum += Math.abs(twa); twaN++;
+      }
+    }
+    const avgTwa = twaN ? twaSum / twaN : null;
+    let type = "transit";
+    if (avgTwa != null) {
+      if (avgTwa < 70) type = "beat";
+      else if (avgTwa > 110) type = "run";
+      else type = "reach";
+    }
+    let vmgSum = 0, vmgN = 0, polarSum = 0, polarN = 0;
+    if (windDeg != null && polarFn) {
+      for (const p of slice) {
+        let twa = p.cog - windDeg;
+        while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+        const vmg = p.sog * Math.cos(twa * Math.PI / 180);
+        vmgSum += Math.abs(vmg); vmgN++;
+        const target = polarFn(p.sog, twa); // not used; need wind speed
+      }
+    }
+    const tacksHere = tacks.filter((m) => m.t >= t0 && m.t <= t1).length;
+    const gybesHere = gybes.filter((m) => m.t >= t0 && m.t <= t1).length;
+    legs.push({
+      name: `Leg ${i + 1}`,
+      type,
+      tStart: t0, tEnd: t1,
+      distM: dist,
+      durationSec: duration,
+      avgSog,
+      avgTwa,
+      vmg: vmgN ? vmgSum / vmgN : null,
+      tacks: tacksHere,
+      gybes: gybesHere,
+    });
+  }
+  return legs;
+}
+
+// Polar plot data: bin (TWA, SOG) pairs across the race.
+//   binsByTwa: { 30: { count, avgSog, maxSog }, 45: …, … }
+function polarPlotData(points, windAtBoatFn) {
+  const bins = {};
+  for (const t of [30, 45, 60, 75, 90, 110, 135, 150, 180]) {
+    bins[t] = { port: { count: 0, sumSog: 0, maxSog: 0 },
+                stbd: { count: 0, sumSog: 0, maxSog: 0 } };
+  }
+  if (!windAtBoatFn) return bins;
+  const angles = Object.keys(bins).map(Number);
+  for (let i = 0; i < points.length; i += 4) {
+    const p = points[i];
+    const w = windAtBoatFn(p.t, p.lat, p.lon);
+    if (!w || w.deg == null) continue;
+    let twa = p.cog - w.deg;
+    while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+    const side = twa < 0 ? "port" : "stbd";
+    const aTwa = Math.abs(twa);
+    let nearest = angles[0];
+    for (const a of angles) if (Math.abs(a - aTwa) < Math.abs(nearest - aTwa)) nearest = a;
+    const bin = bins[nearest][side];
+    bin.count++; bin.sumSog += p.sog;
+    if (p.sog > bin.maxSog) bin.maxSog = p.sog;
+  }
+  return bins;
+}
+
+// Compare two boats in the same race window. For each ~5-second bin,
+// compute boat A's distance from a chosen reference (the first mark or
+// the start) and find when boat B reached that same distance. The gap is
+// (t_B − t_A) seconds, positive = A ahead.
+function timeGapSeries(trackA, trackB, refLatLng) {
+  const t0 = Math.max(trackA.tStart, trackB.tStart);
+  const t1 = Math.min(trackA.tEnd, trackB.tEnd);
+  if (t1 <= t0) return [];
+  const distFromRef = (p) => {
+    const dLat = (p.lat - refLatLng.lat) * 111_320;
+    const dLon = (p.lon - refLatLng.lon) * 111_320 * Math.cos(p.lat * Math.PI / 180);
+    return Math.sqrt(dLat * dLat + dLon * dLon);
+  };
+  const sampledA = [], sampledB = [];
+  for (let t = t0; t <= t1; t += 5) {
+    sampledA.push({ t, d: distFromRef(sampleAt(trackA, t)) });
+    sampledB.push({ t, d: distFromRef(sampleAt(trackB, t)) });
+  }
+  // For each A point, find the latest B sample with d ≤ A's d (B reaches same distance).
+  const out = [];
+  for (const a of sampledA) {
+    let bMatchT = null;
+    for (let j = sampledB.length - 1; j >= 0; j--) {
+      if (sampledB[j].d <= a.d) { bMatchT = sampledB[j].t; break; }
+    }
+    if (bMatchT == null) continue;
+    out.push({ t: a.t, gap: bMatchT - a.t });
+  }
+  return out;
 }
 
 // Detect mark roundings on a windward-leeward course (RHKYC course 8).
@@ -2216,6 +2596,8 @@ function analyzeRace(track, race, startMarks, windAtBoatFn) {
   const { tacks, gybes } = detectTacksGybes(pts, avgWindDeg);
   const raceEndSec = race?.end ? Date.parse(race.end) / 1000 : null;
   const marks = detectMarkRoundings(pts, startSec, raceEndSec);
+  const legs = buildLegs(pts, marks, avgWindDeg, polarSpeed, tacks, gybes);
+  const polar = polarPlotData(pts, windAtBoatFn);
 
   // VMG + polar performance (sampled every ~1 sec).
   const polarSamples = [];
@@ -2235,7 +2617,21 @@ function analyzeRace(track, race, startMarks, windAtBoatFn) {
       avgPolarRatio = polarSamples.reduce((s, x) => s + x, 0) / polarSamples.length;
   }
 
-  return { startLine, tacks, gybes, marks, avgPolarRatio, avgWindDeg };
+  // Heel statistics from quaternion-derived heel field (VTK only).
+  let heelStats = null;
+  const withHeel = pts.filter((p) => typeof p.heel === "number");
+  if (withHeel.length >= 10) {
+    const heels = withHeel.map((p) => Math.abs(p.heel));
+    heels.sort((a, b) => a - b);
+    heelStats = {
+      median: heels[Math.floor(heels.length / 2)],
+      max: heels[heels.length - 1],
+      p90: heels[Math.floor(heels.length * 0.9)],
+    };
+  }
+
+  return { startLine, tacks, gybes, marks, legs, polar, heelStats,
+           avgPolarRatio, avgWindDeg };
 }
 
 // Carry start-line marks across a day's races. Domain knowledge from the

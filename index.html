@@ -67,6 +67,28 @@
     <svg id="windShiftSvg" viewBox="0 0 300 70" preserveAspectRatio="none"></svg>
     <div class="ws-info"></div>
   </div>
+  <div id="legs" hidden>
+    <h2>Legs</h2>
+    <table class="legs-table"><thead>
+      <tr><th></th><th>Type</th><th>Dist</th><th>Time</th><th>SOG</th><th>Tk/Gy</th></tr>
+    </thead><tbody></tbody></table>
+  </div>
+  <div id="maneuvers" hidden>
+    <h2>Maneuvers <span class="man-count"></span></h2>
+    <table class="man-table"><thead>
+      <tr><th>#</th><th>Time</th><th>Type</th><th>Lost</th><th>Recover</th><th>Heel</th></tr>
+    </thead><tbody></tbody></table>
+  </div>
+  <div id="polarPlot" hidden>
+    <h2>Polar (this race)</h2>
+    <svg id="polarSvg" viewBox="-110 -110 220 220" preserveAspectRatio="xMidYMid meet"></svg>
+    <div class="pp-info"></div>
+  </div>
+  <div id="gapChart" hidden>
+    <h2 class="gc-h2">Gap vs <span class="gc-other">—</span></h2>
+    <svg id="gapSvg" viewBox="0 0 300 80" preserveAspectRatio="none"></svg>
+    <div class="gc-info"></div>
+  </div>
   <div id="raceStats" hidden>
     <h2>Race stats</h2>
     <div class="rs-body">
