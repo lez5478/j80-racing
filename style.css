@@ -321,12 +321,13 @@ body { display: flex; }
 
 /* Mark-rounding markers */
 .mark-icon {
-  width: 22px; height: 22px; border-radius: 50%;
+  width: 26px; height: 26px; border-radius: 50%;
   background: #fef3c7; color: #0f1924;
-  border: 2px solid #f59e0b; font-weight: 700; font-size: 11px;
+  border: 2px solid #f59e0b; font-weight: 700; font-size: 12px;
   display: flex; align-items: center; justify-content: center;
   font-family: -apple-system, Segoe UI, sans-serif;
   box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  letter-spacing: 0.5px;
 }
 
 /* Wind chip in sidebar */

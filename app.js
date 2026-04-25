@@ -1520,10 +1520,11 @@ function renderRaceStats(track) {
   }
 
   // Maneuvers
+  const totalRoundings = stats.marks.reduce((n, m) => n + m.rounded.length, 0);
   rsManeuversGrid.innerHTML = `
     <span class="rs-k">Tacks</span><span class="rs-v">${stats.tacks.length}</span>
     <span class="rs-k">Gybes</span><span class="rs-v">${stats.gybes.length}</span>
-    <span class="rs-k">Mark roundings</span><span class="rs-v">${stats.marks.length}</span>
+    <span class="rs-k">Marks (rounded)</span><span class="rs-v">${stats.marks.length} (${totalRoundings})</span>
     <span class="rs-k">Avg wind ${stats.avgWindDeg != null ? Math.round(stats.avgWindDeg) + "°" : "—"}</span>
     <span class="rs-v"></span>
   `;
@@ -1544,17 +1545,19 @@ function renderRaceStats(track) {
     ${heelRow}
   `;
 
-  // Plot mark roundings as numbered map circles.
+  // Plot UNIQUE marks (W, L, etc.) — multiple roundings of the same
+  // physical mark merge into one pin so a 2-lap course still shows
+  // exactly two marks on the map.
   markRoundingsLayer.clearLayers();
-  stats.marks.forEach((m, i) => {
+  stats.marks.forEach((m) => {
     L.marker([m.lat, m.lon], {
       icon: L.divIcon({
-        html: `<div class="mark-icon">${i + 1}</div>`,
-        className: "", iconSize: [22, 22], iconAnchor: [11, 11],
+        html: `<div class="mark-icon">${m.label}</div>`,
+        className: "", iconSize: [26, 26], iconAnchor: [13, 13],
       }),
       interactive: true, zIndexOffset: 300,
     })
-    .bindTooltip(`Mark ${i + 1} · ${new Date(m.t * 1000).toLocaleTimeString()} · ${Math.round(m.angle)}° turn`)
+    .bindTooltip(`Mark ${m.label} · rounded ${m.rounded.length}×`)
     .addTo(markRoundingsLayer);
   });
 }
@@ -2452,26 +2455,22 @@ function timeGapSeries(trackA, trackB, refLatLng) {
 }
 
 // Detect mark roundings on a windward-leeward course (RHKYC course 8).
-// A real mark rounding flips the boat between UPWIND mode (~45° off the
-// wind, tacking through ~90°) and DOWNWIND mode (~135-180° off the wind,
-// gybing through ~60°). 90° course changes during the beat are TACKS,
-// not marks — those happen every ~30-90 seconds and don't change the
-// upwind/downwind mode.
+// A real rounding flips the boat between UPWIND (~45° off wind, tacking
+// through ~90°) and DOWNWIND (~135-180° off wind, gybing through ~60°).
+// 90° course changes during the beat are TACKS, not marks.
 //
-// The trick: average heading over a 90-second window BEFORE the candidate
-// point, and another 90 seconds AFTER. Real mark roundings cause the
-// average heading to reverse by ≥150°. Tacks/gybes only swing the
-// instantaneous heading, not the long-window average.
+// Returns rounding *events* — one per turn (a 2-lap course returns 4).
+// `clusterMarks()` then merges nearby events into UNIQUE marks for
+// display. The leg-splitter uses the events; the map uses the unique
+// marks.
 function detectMarkRoundings(points, raceStartSec, raceEndSec) {
   if (points.length < 30) return [];
   const WINDOW_SEC = 90;
   const MIN_REVERSAL_DEG = 155;
   const MIN_GAP_SEC = 180;
 
-  // Helper: circular-mean COG over points in [tFrom, tTo].
   function meanCog(tFrom, tTo) {
     let sx = 0, sy = 0, c = 0;
-    // Linear scan — points are sorted by time and short.
     for (const p of points) {
       if (p.t < tFrom) continue;
       if (p.t > tTo) break;
@@ -2484,9 +2483,6 @@ function detectMarkRoundings(points, raceStartSec, raceEndSec) {
 
   const out = [];
   let lastT = 0;
-  // Only scan inside the actual race window — pre-start sail-trim and the
-  // post-race sail-back to mooring produce lots of 180° flips that aren't
-  // course marks.
   const tStart = Math.max(points[0].t + WINDOW_SEC, raceStartSec ?? -Infinity);
   const tEnd = Math.min(points[points.length - 1].t - WINDOW_SEC, raceEndSec ?? Infinity);
   for (let t = tStart; t <= tEnd; t += 5) {
@@ -2497,21 +2493,105 @@ function detectMarkRoundings(points, raceStartSec, raceEndSec) {
     let delta = after - before;
     if (delta > 180) delta -= 360; else if (delta < -180) delta += 360;
     if (Math.abs(delta) < MIN_REVERSAL_DEG) continue;
-    // Snap to the actual rounding time — find the local SOG minimum
-    // inside [t-30, t+30].
-    let bestSog = Infinity, bestP = null;
+    // Estimate the mark position from the boat's track during the turn.
+    // The tightest part of the curve = boat slowing + sharpest direction
+    // change. The mark sits on the inside of that curve.
+    const turnPoints = [];
     for (const p of points) {
-      if (p.t < t - 30) continue;
-      if (p.t > t + 30) break;
+      if (p.t < t - 15) continue;
+      if (p.t > t + 15) break;
+      turnPoints.push(p);
+    }
+    if (turnPoints.length < 4) continue;
+    let bestSog = Infinity, bestP = turnPoints[Math.floor(turnPoints.length / 2)];
+    let cLat = 0, cLon = 0;
+    for (const p of turnPoints) {
+      cLat += p.lat; cLon += p.lon;
       if (p.sog < bestSog) { bestSog = p.sog; bestP = p; }
     }
-    if (!bestP) continue;
-    out.push({ t: bestP.t, lat: bestP.lat, lon: bestP.lon, angle: Math.abs(delta) });
-    // Use the candidate scan time `t` (not bestP.t) for the gap so adjacent
-    // 5-sec scans of the same true rounding don't all fire.
+    cLat /= turnPoints.length; cLon /= turnPoints.length;
+    // Port-side offset: the mark is to the inside of the curve. The inside
+    // is on the boat's port side (boats round the mark to port). Using the
+    // boat's heading at the slowest moment, offset 5 m to port.
+    const cogRad = (bestP.cog * Math.PI / 180);
+    // Port = 90° to the left of heading. Unit vector to port:
+    //   (sin(cog - 90°), cos(cog - 90°)) = (-cos(cog), sin(cog))
+    const portMetres = 5;
+    const dLatPort = -Math.cos(cogRad) * portMetres / 111_320;
+    const dLonPort = Math.sin(cogRad) * portMetres
+                    / (111_320 * Math.cos(cLat * Math.PI / 180));
+    out.push({
+      t: bestP.t,
+      lat: cLat + dLatPort,
+      lon: cLon + dLonPort,
+      angle: Math.abs(delta),
+      bearingBefore: before,   // direction boat was heading INTO the rounding
+      bearingAfter: after,
+    });
     lastT = t;
   }
   return out;
+}
+
+// Cluster rounding events into unique physical marks. Two roundings within
+// `radius` metres of each other are the same mark; their positions average.
+// Returns [{ lat, lon, label, rounded: [eventIndex, …] }].
+function clusterMarks(events, windDeg, radius = 120) {
+  if (!events.length) return [];
+  const dist = (a, b) => {
+    const dLat = (a.lat - b.lat) * 111_320;
+    const dLon = (a.lon - b.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+    return Math.sqrt(dLat * dLat + dLon * dLon);
+  };
+  // Start with one cluster per event.
+  let clusters = events.map((e, i) => ({
+    lat: e.lat, lon: e.lon, rounded: [i], label: "",
+  }));
+  // Iteratively merge the closest pair while it's within `radius`.
+  // Hierarchical agglomerative — guarantees borderline pairs collapse
+  // even when scanned in unfortunate order.
+  while (clusters.length > 1) {
+    let bestI = -1, bestJ = -1, bestD = Infinity;
+    for (let i = 0; i < clusters.length; i++) {
+      for (let j = i + 1; j < clusters.length; j++) {
+        const d = dist(clusters[i], clusters[j]);
+        if (d < bestD) { bestD = d; bestI = i; bestJ = j; }
+      }
+    }
+    if (bestD > radius) break;
+    const a = clusters[bestI], b = clusters[bestJ];
+    const total = a.rounded.length + b.rounded.length;
+    a.lat = (a.lat * a.rounded.length + b.lat * b.rounded.length) / total;
+    a.lon = (a.lon * a.rounded.length + b.lon * b.rounded.length) / total;
+    a.rounded = [...a.rounded, ...b.rounded];
+    clusters.splice(bestJ, 1);
+  }
+  // Label W vs L based on the bearing the boat was sailing INTO this mark
+  // for the first rounding. If that bearing is roughly into the wind
+  // (within 60° of windDeg), the boat was beating → upwind mark = W.
+  // Otherwise it was running → leeward mark = L.
+  for (const c of clusters) {
+    const firstEv = events[c.rounded[0]];
+    if (windDeg != null) {
+      let twa = firstEv.bearingBefore - windDeg;
+      while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+      c.label = Math.abs(twa) < 90 ? "W" : "L";
+    } else {
+      c.label = `M${clusters.indexOf(c) + 1}`;
+    }
+  }
+  // If two clusters got the same W/L label, suffix them with a counter
+  // (rare — happens when a course has two windward marks).
+  const counts = {};
+  for (const c of clusters) counts[c.label] = (counts[c.label] || 0) + 1;
+  const seen = {};
+  for (const c of clusters) {
+    if (counts[c.label] > 1) {
+      seen[c.label] = (seen[c.label] || 0) + 1;
+      c.label = `${c.label}${seen[c.label]}`;
+    }
+  }
+  return clusters;
 }
 
 // Sanity check on the printed J/80 Start time. Each finisher reports its
@@ -2595,8 +2675,9 @@ function analyzeRace(track, race, startMarks, windAtBoatFn) {
 
   const { tacks, gybes } = detectTacksGybes(pts, avgWindDeg);
   const raceEndSec = race?.end ? Date.parse(race.end) / 1000 : null;
-  const marks = detectMarkRoundings(pts, startSec, raceEndSec);
-  const legs = buildLegs(pts, marks, avgWindDeg, polarSpeed, tacks, gybes);
+  const markEvents = detectMarkRoundings(pts, startSec, raceEndSec);
+  const marks = clusterMarks(markEvents, avgWindDeg);
+  const legs = buildLegs(pts, markEvents, avgWindDeg, polarSpeed, tacks, gybes);
   const polar = polarPlotData(pts, windAtBoatFn);
 
   // VMG + polar performance (sampled every ~1 sec).
