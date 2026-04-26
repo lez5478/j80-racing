@@ -1835,7 +1835,7 @@ function isFormField(el) {
   return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA"
     || el.tagName === "SELECT" || el.isContentEditable);
 }
-const SPEEDS = [5, 10, 30, 50, 100];
+const SPEEDS = [1, 5, 10, 30, 50, 100];
 window.addEventListener("keydown", (e) => {
   if (isFormField(e.target)) return;
   if (e.metaKey || e.ctrlKey || e.altKey) return;
