@@ -1965,6 +1965,54 @@ function parseTCX(text) {
   return { points, buttons: [] };
 }
 
+// Vakaros (and similar) CSV export. Header form:
+//   timestamp,latitude,longitude,sog_kts,cog,hdg_true,heel,trim
+// Native heel + trim → no quaternion conversion needed.
+function parseVakarosCSV(text) {
+  const lines = text.split(/\r?\n/);
+  if (!lines.length) return { points: [], buttons: [] };
+  const header = lines[0].toLowerCase().split(",").map((s) => s.trim());
+  const idx = (n) => header.indexOf(n);
+  const iT = idx("timestamp");
+  const iLat = idx("latitude");
+  const iLon = idx("longitude");
+  const iSog = idx("sog_kts") >= 0 ? idx("sog_kts") : idx("sog");
+  const iCog = idx("cog");
+  const iHdg = idx("hdg_true") >= 0 ? idx("hdg_true") : idx("heading");
+  const iHeel = idx("heel");
+  const iTrim = idx("trim") >= 0 ? idx("trim") : idx("pitch");
+  if (iT < 0 || iLat < 0 || iLon < 0) {
+    throw new Error("CSV missing timestamp/latitude/longitude columns");
+  }
+  const points = [];
+  for (let row = 1; row < lines.length; row++) {
+    const line = lines[row];
+    if (!line) continue;
+    const cols = line.split(",");
+    const t = Date.parse(cols[iT]) / 1000;
+    const lat = Number(cols[iLat]);
+    const lon = Number(cols[iLon]);
+    if (!isFinite(t) || !isFinite(lat) || !isFinite(lon)) continue;
+    const p = { t, lat, lon };
+    p.sog = iSog >= 0 ? Number(cols[iSog]) : 0;
+    p.cog = iCog >= 0 ? Number(cols[iCog]) : 0;
+    if (iHdg >= 0) {
+      const h = Number(cols[iHdg]);
+      if (isFinite(h)) p.hdg = h;
+    }
+    if (iHeel >= 0) {
+      const h = Number(cols[iHeel]);
+      if (isFinite(h)) p.heel = h;
+    }
+    if (iTrim >= 0) {
+      const p2 = Number(cols[iTrim]);
+      if (isFinite(p2)) p.pitch = p2;
+    }
+    points.push(p);
+  }
+  return { points, buttons: [] };
+}
+
 // Dispatch by file extension.
 function parseTrackFile(name, bytes) {
   const ext = name.toLowerCase().split(".").pop();
@@ -1972,6 +2020,7 @@ function parseTrackFile(name, bytes) {
   const text = new TextDecoder("utf-8").decode(bytes);
   if (ext === "gpx") return parseGPX(text);
   if (ext === "tcx") return parseTCX(text);
+  if (ext === "csv") return parseVakarosCSV(text);
   throw new Error(`Unsupported file format: .${ext}`);
 }
 
@@ -2758,7 +2807,7 @@ function sliceByTime(points, t0, t1) {
 }
 
 function indexFiles(fileList) {
-  const files = Array.from(fileList).filter((f) => /\.(vtk|gpx|tcx)$/i.test(f.name));
+  const files = Array.from(fileList).filter((f) => /\.(vtk|gpx|tcx|csv)$/i.test(f.name));
   if (!files.length) {
     statusEl.textContent = "No .VTK files found.";
     return;

@@ -67,7 +67,7 @@
 
 <div id="drop">
   <strong>Drop VTK files here</strong><br>or click to pick
-  <input type="file" id="pickFiles" accept=".vtk,.VTK,.gpx,.GPX,.tcx,.TCX,.fit,.FIT" multiple hidden>
+  <input type="file" id="pickFiles" accept=".vtk,.VTK,.gpx,.GPX,.tcx,.TCX,.fit,.FIT,.csv,.CSV" multiple hidden>
 </div>
 
 <div id="log"></div>
@@ -143,10 +143,26 @@ function dateFromFit(file) {
   return `${y}-${m}-${dd}`;
 }
 
+// Read the first data row of a CSV to get the timestamp.
+async function dateFromCsv(file) {
+  const text = await file.slice(0, 4096).text();
+  const lines = text.split(/\r?\n/);
+  if (lines.length < 2) return null;
+  // Find timestamp column index from header.
+  const header = lines[0].toLowerCase().split(",").map((s) => s.trim());
+  const iT = header.indexOf("timestamp");
+  if (iT < 0) return null;
+  const cols = lines[1].split(",");
+  const sec = Date.parse(cols[iT]) / 1000;
+  if (!isFinite(sec)) return null;
+  return hkDate(sec);
+}
+
 async function dateFromFile(file) {
   const ext = file.name.toLowerCase().split(".").pop();
   if (ext === "vtk") return dateFromVtk(file);
   if (ext === "gpx" || ext === "tcx") return dateFromXml(file);
+  if (ext === "csv") return dateFromCsv(file);
   if (ext === "fit") return dateFromFit(file);
   return null;
 }
@@ -184,8 +200,8 @@ async function uploadOne(file) {
 }
 
 async function handleFiles(files) {
-  const supported = [...files].filter((f) => /\.(vtk|gpx|tcx|fit)$/i.test(f.name));
-  if (!supported.length) { log("No .VTK / .GPX / .TCX / .FIT files", "err"); return; }
+  const supported = [...files].filter((f) => /\.(vtk|gpx|tcx|fit|csv)$/i.test(f.name));
+  if (!supported.length) { log("No .VTK / .GPX / .TCX / .FIT / .CSV files", "err"); return; }
   for (const f of supported) await uploadOne(f);
 }
 

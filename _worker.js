@@ -14,7 +14,7 @@ const BOAT_RE = /^[A-Za-z0-9 '._-]{1,32}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 // Accept Velocitek VTK + the common Garmin/export formats. Filename can be
 // anything safe ending in one of the known extensions.
-const FILE_RE = /^[\w.\-' ]{1,80}\.(vtk|gpx|tcx|fit)$/i;
+const FILE_RE = /^[\w.\-' ]{1,80}\.(vtk|gpx|tcx|fit|csv)$/i;
 const MAX_BYTES = 30 * 1024 * 1024;
 
 const CORS_HEADERS = {
