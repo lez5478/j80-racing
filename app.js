@@ -526,8 +526,12 @@ function updateWindMap() {
   const date = activeDayKey;
   const day = window.WIND_HOURLY[date];
   if (!day) {
-    // No data for this day — hide all markers.
-    for (const { marker } of windMarkers.values()) windMapLayer.removeLayer(marker);
+    // No data for this day — hide all markers AND clear cached readings
+    // so the particle animation / IDW grid stop drawing yesterday's wind.
+    for (const info of windMarkers.values()) {
+      windMapLayer.removeLayer(info.marker);
+      info.last = null;
+    }
     return;
   }
   let h = null;
@@ -538,7 +542,9 @@ function updateWindMap() {
   for (const [name, info] of windMarkers) {
     const series = day[name];
     if (!series || !series.length) {
+      // Station has no data this day — drop it AND clear its cached reading.
       windMapLayer.removeLayer(info.marker);
+      info.last = null;
       continue;
     }
     let pick = series[0];
