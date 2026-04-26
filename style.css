@@ -373,6 +373,42 @@ body { display: flex; }
   pointer-events: none;
 }
 
+/* On-map track legend (bottom-left). One row per loaded track with a
+   colour swatch and boat name. Click a row to toggle that track's
+   visibility on the map. */
+.track-legend {
+  background: rgba(15, 25, 36, 0.88);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  color: #dbe7f3;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  font-family: -apple-system, Segoe UI, sans-serif;
+  font-size: 12px;
+  max-width: 220px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.tl-row {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 4px; border-radius: 3px;
+  cursor: pointer; user-select: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tl-row:hover { background: rgba(255, 255, 255, 0.08); }
+.tl-row .tl-swatch {
+  width: 12px; height: 12px; flex: 0 0 12px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4) inset;
+}
+.tl-row .tl-name {
+  flex: 1; overflow: hidden; text-overflow: ellipsis;
+}
+.tl-row.tl-hidden .tl-swatch { opacity: 0.25; }
+.tl-row.tl-hidden .tl-name { opacity: 0.45; text-decoration: line-through; }
+
 /* Boat-click popup — translucent so other boats stay visible behind */
 .leaflet-popup.boat-popup .leaflet-popup-content-wrapper {
   background: rgba(15, 25, 36, 0.55);

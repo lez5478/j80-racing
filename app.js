@@ -455,6 +455,7 @@ function addTrack(name, points, meta = {}) {
     if (track.visible) layer.addTo(map); else map.removeLayer(layer);
     li.classList.toggle("hidden", !track.visible);
     updateRaceClockBounds();
+    renderTrackLegend();
   });
   li.querySelector("button").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -463,6 +464,7 @@ function addTrack(name, points, meta = {}) {
     track.removed = true;
     if (selectedTrackId === id) selectTrack(null);
     updateRaceClockBounds();
+    renderTrackLegend();
   });
   tracksEl.appendChild(li);
 
@@ -470,6 +472,7 @@ function addTrack(name, points, meta = {}) {
   updateRaceClockBounds();
   // Place the boat at whatever the current race time is (or start).
   updateBoatsToRaceTime(raceTime ?? track.tStart);
+  renderTrackLegend();
   statusEl.textContent = `Loaded ${tracks.filter((t) => !t.removed).length} track(s)`;
 }
 
@@ -892,6 +895,62 @@ function refreshWindReadout() {
   windBarbInfo.textContent = `${station} · ${String(pick.h).padStart(2, "0")}:00 HKT`;
 }
 
+// ---------- On-map track legend ----------
+// A floating panel pinned to the map (bottom-left). One row per loaded
+// track with its colour swatch + boat/race name. Click a row to toggle
+// that track's visibility — same effect as the swatch toggle in the
+// sidebar's "Tracks on map" list, but visible while you're looking at
+// the chart.
+const trackLegend = L.control({ position: "bottomleft" });
+trackLegend.onAdd = function () {
+  const div = L.DomUtil.create("div", "track-legend");
+  // Stop map drags / wheel-zoom from firing when interacting with the legend.
+  L.DomEvent.disableClickPropagation(div);
+  L.DomEvent.disableScrollPropagation(div);
+  div.style.display = "none";
+  return div;
+};
+trackLegend.addTo(map);
+
+// Compact label for a track: "R1 · Meltemi" (or just "Meltemi" if no race
+// context). Falls back to the verbose name property when meta is absent.
+function trackLegendLabel(t) {
+  const boat = t.meta?.boat;
+  const race = t.meta?.race?.name;
+  if (boat && race) return `${race} · ${boat}`;
+  if (boat) return boat;
+  return t.name;
+}
+
+function renderTrackLegend() {
+  const div = trackLegend.getContainer();
+  if (!div) return;
+  const live = tracks.filter((t) => !t.removed);
+  if (!live.length) { div.style.display = "none"; div.innerHTML = ""; return; }
+  div.style.display = "block";
+  div.innerHTML = live.map((t) => `
+    <div class="tl-row ${t.visible ? "" : "tl-hidden"}" data-id="${t.id}" title="Click to ${t.visible ? "hide" : "show"} on map">
+      <span class="tl-swatch" style="background:${t.color}"></span>
+      <span class="tl-name">${trackLegendLabel(t)}</span>
+    </div>`).join("");
+  for (const row of div.querySelectorAll(".tl-row")) {
+    row.addEventListener("click", () => {
+      const tr = tracks[Number(row.dataset.id)];
+      if (!tr || tr.removed) return;
+      tr.visible = !tr.visible;
+      if (tr.visible) tr.layer.addTo(map); else map.removeLayer(tr.layer);
+      // Sync sidebar list state.
+      const li = tracksEl.querySelector(`li[data-id="${tr.id}"]`);
+      if (li) li.classList.toggle("hidden", !tr.visible);
+      row.classList.toggle("tl-hidden", !tr.visible);
+      row.title = `Click to ${tr.visible ? "hide" : "show"} on map`;
+      // If we just hid the selected track, clear selection panels.
+      if (selectedTrackId === tr.id && !tr.visible) selectTrack(null);
+      updateRaceClockBounds();
+    });
+  }
+}
+
 // ---------- Race-tab solo selector ----------
 // "All" + one pill per race. Picking a race hides the tracks tied to the
 // other races. The track-level visibility toggles still work — this is just
@@ -921,6 +980,7 @@ function applyRaceFilter() {
   if (selectedTrackId != null && !tracks[selectedTrackId]?.visible) {
     selectTrack(null);
   }
+  renderTrackLegend();
 }
 
 function renderRaceTabs() {
@@ -2842,6 +2902,7 @@ function clearTracks() {
   activeRaceFilter = null;
   raceTabsEl.hidden = true;
   raceTabsEl.innerHTML = "";
+  renderTrackLegend();
 }
 
 // Optional file-picker / drop UI (only present if elements exist in HTML).
