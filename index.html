@@ -12,7 +12,9 @@
 <div id="sidebarScrim"></div>
 <div id="sidebar">
   <h1>J/80 / J/70 Racing</h1>
-  <p class="hint">RHKYC J/80 fleet · race replay from VTK tracks · <a href="upload.html" style="color:#6ea8ff;">Upload yours →</a></p>
+  <p class="hint">RHKYC J/80 fleet · race replay · <a href="upload.html" style="color:#6ea8ff;">Upload yours →</a></p>
+  <h2>My boat</h2>
+  <select id="myBoatPicker" class="days-picker"></select>
   <div id="status"></div>
   <h2>Race day</h2>
   <select id="daysPicker" class="days-picker">
@@ -132,6 +134,7 @@
   </div>
 </div>
 <div id="map"></div>
+<div id="startCountdown" hidden></div>
 <div id="playbar" hidden>
   <button id="playBtn" class="pb-btn" title="Play / pause">▶</button>
   <div class="pb-time"><span id="pbNow">–</span> / <span id="pbEnd">–</span></div>

@@ -281,6 +281,18 @@ const COLORS = [
   "#13c2c2", "#eb2f96", "#fa8c16", "#2f54eb", "#a0d911",
 ];
 let colorIdx = 0;
+// Whose boat are we watching? Each fleet member picks their own from the
+// dropdown — that boat gets highlighted in the scoreboard, drives the
+// "Meltemi: P3" line in race stats, and is the "self" reference for the
+// gap chart and ghost-fleet. Defaults to whatever the user picked last
+// (saved in localStorage).
+const MY_BOAT_KEY = "sailing.myBoat";
+let MY_BOAT = { sail: "HKG2231", name: "Meltemi" }; // sensible default
+try {
+  const saved = JSON.parse(localStorage.getItem(MY_BOAT_KEY) || "null");
+  if (saved && saved.sail && saved.name) MY_BOAT = saved;
+} catch { /* corrupt storage */ }
+
 // Stable colour per boat name — Meltemi is always red, Jelignite always
 // blue, etc. — so the same boat is the same colour across R1/R2/R3 of a
 // day and across multi-day comparisons.
@@ -310,7 +322,7 @@ function humanDuration(sec) {
 function boatPopupHtml(track, sample) {
   const boatName = track.meta?.boat || track.name;
   const race = track.meta?.race;
-  const sailNo = boatName === "Meltemi" ? "HKG2231" : "";
+  const sailNo = boatName === MY_BOAT.name ? MY_BOAT.sail : "";
   const cog = Math.round(sample.cog).toString().padStart(3, "0");
   const sog = sample.sog.toFixed(1);
   const sogKn = (sample.sog).toFixed(1); // VTK SOG is already in knots
@@ -918,7 +930,7 @@ function refreshWindReadout() {
 // that track's visibility — same effect as the swatch toggle in the
 // sidebar's "Tracks on map" list, but visible while you're looking at
 // the chart.
-const trackLegend = L.control({ position: "bottomleft" });
+const trackLegend = L.control({ position: "topleft" });
 trackLegend.onAdd = function () {
   const div = L.DomUtil.create("div", "track-legend");
   // Stop map drags / wheel-zoom from firing when interacting with the legend.
@@ -1025,7 +1037,7 @@ function renderRaceTabs() {
         if (selectedTrackId == null) scoreboardEl.hidden = true;
       } else {
         const race = (window.RACES?.[activeDayKey] || []).find((r) => r.name === value);
-        renderScoreboard(race || null, "HKG2231");
+        renderScoreboard(race || null, MY_BOAT.sail);
       }
     });
     raceTabsEl.appendChild(b);
@@ -1116,7 +1128,7 @@ function selectTrack(id) {
 
   // Render the full scoreboard for this race in the sidebar, with the
   // track's own boat highlighted.
-  const sailNumber = t.meta?.boat === "Meltemi" ? "HKG2231" : null;
+  const sailNumber = t.meta?.boat === MY_BOAT.name ? MY_BOAT.sail : null;
   renderScoreboard(t.meta?.race || null, sailNumber);
   renderRaceStats(t);
   renderWindShift(t);
@@ -1142,18 +1154,18 @@ function selectTrack(id) {
       readoutEl.querySelector(".readout-body").appendChild(raceRow);
     }
     const fleet = race.finishers.length + race.dnc.length;
-    const myFinisher = race.finishers.find((f) => f.sail === "HKG2231");
-    const myDnx = race.dnc.find((x) => x.sail === "HKG2231");
+    const myFinisher = race.finishers.find((f) => f.sail === MY_BOAT.sail);
+    const myDnx = race.dnc.find((x) => x.sail === MY_BOAT.sail);
     let myLine = "";
-    if (boatName === "Meltemi") {
+    if (boatName === MY_BOAT.name) {
       if (myFinisher) {
         const winner = race.finishers[0];
         const gapMs = Date.parse(`${race.date}T${myFinisher.finish}`) -
                       Date.parse(`${race.date}T${winner.finish}`);
         const gap = gapMs > 0 ? `+${Math.round(gapMs / 1000)}s` : "leader";
-        myLine = `Meltemi: P${myFinisher.place}/${fleet} · ${gap} · finish ${myFinisher.finish}`;
+        myLine = `${MY_BOAT.name}: P${myFinisher.place}/${fleet} · ${gap} · finish ${myFinisher.finish}`;
       } else if (myDnx) {
-        myLine = `Meltemi: ${myDnx.status}`;
+        myLine = `${MY_BOAT.name}: ${myDnx.status}`;
       }
     }
     raceRow.innerHTML = `
@@ -1234,7 +1246,7 @@ function setupGhostsForTrack(track) {
   const ghosts = [];
   const colors = ["#a3a3a3", "#94a3b8", "#cbd5e1"]; // muted greys
   for (const f of race.finishers) {
-    if (f.sail === "HKG2231") continue; // skip our own boat
+    if (f.sail === MY_BOAT.sail) continue; // skip our own boat
     const elapsed = f.elapsed.split(":").map(Number);
     const elapsedSec = elapsed[0] * 3600 + elapsed[1] * 60 + elapsed[2];
     if (!elapsedSec) continue;
@@ -1323,7 +1335,7 @@ function downloadBlob(filename, type, content) {
 // Race report — opens a printable HTML window the user can save as PDF.
 function openRaceReport(track, stats) {
   const race = track.meta?.race;
-  const me = race?.finishers.find((f) => f.sail === "HKG2231");
+  const me = race?.finishers.find((f) => f.sail === MY_BOAT.sail);
   const mePlace = me ? `P${me.place}/${race.finishers.length + race.dnc.length}` : "—";
   const html = `<!doctype html><html><head><meta charset="utf-8">
   <title>${track.name} — race report</title>
@@ -1355,7 +1367,7 @@ function openRaceReport(track, stats) {
   <table><thead><tr><th>P</th><th>Boat</th><th>Sail</th><th>Finish</th><th>Elapsed</th></tr></thead><tbody>
   ${(race?.finishers || []).map((f) => {
     const name = (window.BOAT_NAMES || {})[f.sail] || "—";
-    const self = f.sail === "HKG2231" ? "background:#fff7d6;" : "";
+    const self = f.sail === MY_BOAT.sail ? "background:#fff7d6;" : "";
     return `<tr style="${self}"><td>${f.place}</td><td>${name}</td><td>${f.sail}</td><td>${f.finish}</td><td>${f.elapsed}</td></tr>`;
   }).join("")}
   </tbody></table>
@@ -1784,6 +1796,7 @@ function updateBoatsToRaceTime(t) {
   updateWindMap();
   renderWindGrid();
   tickGhosts();
+  refreshStartCountdown();
   syncUrlState();
 }
 
@@ -1922,7 +1935,7 @@ async function applyUrlStateOnLoad() {
     renderRaceTabs();
     applyRaceFilter();
     const r = (window.RACES?.[day] || []).find((x) => x.name === race);
-    if (r) renderScoreboard(r, "HKG2231");
+    if (r) renderScoreboard(r, MY_BOAT.sail);
   }
   const t = params.get("t");
   if (t) {
@@ -2193,7 +2206,7 @@ function renderDayList() {
       const races = window.RACES[k];
       const n = races.length;
       const meltemiRaced = races.some((r) =>
-        r.finishers.some((f) => f.sail === "HKG2231"));
+        r.finishers.some((f) => f.sail === MY_BOAT.sail));
       const tag = meltemiRaced ? "" : " · no Meltemi";
       return `<option value="${k}">${k} · ${n} race${n > 1 ? "s" : ""}${tag}</option>`;
     }).join("");
@@ -2292,10 +2305,10 @@ async function selectDay(key) {
     for (const [boat, slot] of byBoat) {
       const slice = sliceByTime(slot.points, w.windowStart, w.windowEnd);
       if (slice.length < 2) continue;
-      const meltemi = w.race.finishers.find((f) => f.sail === "HKG2231");
-      const dnx = w.race.dnc.find((x) => x.sail === "HKG2231");
-      const tag = boat === "Meltemi"
-        ? (meltemi ? `P${meltemi.place}` : (dnx ? dnx.status : "-"))
+      const myFin = w.race.finishers.find((f) => f.sail === MY_BOAT.sail);
+      const myDnx = w.race.dnc.find((x) => x.sail === MY_BOAT.sail);
+      const tag = boat === MY_BOAT.name
+        ? (myFin ? `P${myFin.place}` : (myDnx ? myDnx.status : "-"))
         : "";
       const name = `${w.race.name}${w.race.title ? " " + w.race.title : ""} · ${boat}${tag ? " (" + tag + ")" : ""}`;
       const startMarks = startLinesByBoat.get(boat)[wi];
@@ -2309,7 +2322,7 @@ async function selectDay(key) {
   // Default the scoreboard to the first race of the day so opening a day
   // immediately shows results alongside the track(s).
   const firstRace = (window.RACES?.[key] || [])[0];
-  if (firstRace) renderScoreboard(firstRace, "HKG2231");
+  if (firstRace) renderScoreboard(firstRace, MY_BOAT.sail);
 
   const haveWind = window.WIND_DAILY && window.WIND_DAILY[key];
   statusEl.textContent = `${key}: ${added} race-track(s)`
@@ -2919,6 +2932,7 @@ function clearTracks() {
   activeRaceFilter = null;
   raceTabsEl.hidden = true;
   raceTabsEl.innerHTML = "";
+  startCountdownEl.hidden = true;
   renderTrackLegend();
 }
 
@@ -2929,6 +2943,140 @@ const clearBtn = document.getElementById("clearBtn");
 const dropEl = document.getElementById("drop");
 if (pickFiles) pickFiles.addEventListener("change", (e) => indexFiles(e.target.files));
 if (pickDir) pickDir.addEventListener("change", (e) => indexFiles(e.target.files));
+
+// ---------- Start countdown + time-to-line predictor ----------
+const startCountdownEl = document.getElementById("startCountdown");
+
+// Time (seconds) for a boat at (lat, lon) moving sog kn at cog° to cross
+// the line A-B. Returns { distance, eta } in metres / seconds, or null
+// if not moving toward the line. Signed perpendicular trick: compute the
+// line normal, then divide signed distance-to-line by velocity component
+// along that normal.
+function timeToLinePredict(boat, sog, cogDeg, line) {
+  const a = line.rc, b = line.pin;
+  const lat0 = (a.lat + b.lat) / 2;
+  const mLat = 111_320, mLon = 111_320 * Math.cos(lat0 * Math.PI / 180);
+  const ax = a.lon * mLon, ay = a.lat * mLat;
+  const bx = b.lon * mLon, by = b.lat * mLat;
+  const px = boat.lon * mLon, py = boat.lat * mLat;
+  const dx = bx - ax, dy = by - ay;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  if (len < 0.001) return null;
+  const distSigned = ((px - ax) * dy - (py - ay) * dx) / len;
+  const speedMps = sog * 0.5144444;
+  const cogRad = cogDeg * Math.PI / 180;
+  const vx = Math.sin(cogRad) * speedMps;
+  const vy = Math.cos(cogRad) * speedMps;
+  const vPerp = (vx * dy - vy * dx) / len;
+  if (Math.abs(vPerp) < 0.05) return { distance: Math.abs(distSigned), eta: null };
+  const eta = -distSigned / vPerp;
+  if (eta < 0) return { distance: Math.abs(distSigned), eta: null };
+  return { distance: Math.abs(distSigned), eta };
+}
+
+// Identify which race the playback clock is currently in the start
+// sequence for: any visible track whose race.start is within the next
+// 5 minutes, or the most recent gun (within 30s past).
+function activeRaceForCountdown() {
+  if (raceTime == null) return null;
+  let best = null, bestAbs = Infinity;
+  const seen = new Set();
+  for (const t of tracks) {
+    if (t.removed || !t.visible || !t.meta?.race?.start) continue;
+    const r = t.meta.race;
+    if (seen.has(r.name)) continue;
+    seen.add(r.name);
+    const startSec = Date.parse(r.start) / 1000;
+    const delta = startSec - raceTime;       // +ve = start is in future
+    if (delta > 5 * 60 || delta < -30) continue;
+    if (Math.abs(delta) < bestAbs) { bestAbs = Math.abs(delta); best = { race: r, track: t }; }
+  }
+  return best;
+}
+
+function refreshStartCountdown() {
+  const active = activeRaceForCountdown();
+  if (!active) { startCountdownEl.hidden = true; return; }
+  const startSec = Date.parse(active.race.start) / 1000;
+  const tToGun = startSec - raceTime;
+  startCountdownEl.hidden = false;
+  // Format T-MM:SS / T+SS
+  const sign = tToGun >= 0 ? "T-" : "T+";
+  const abs = Math.abs(tToGun);
+  const mm = Math.floor(abs / 60);
+  const ss = Math.floor(abs % 60);
+  const cdText = tToGun >= 0
+    ? `${sign}${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`
+    : `🟢 GUN +${ss}s`;
+  let cdClass = "cd-yellow";
+  if (tToGun < 0) cdClass = "cd-go";
+  else if (tToGun < 60) cdClass = "cd-red";
+  else if (tToGun < 120) cdClass = "cd-orange";
+
+  // Time-to-line, only when MY_BOAT has a track in this race AND a start line.
+  let tlInfo = "";
+  const myTrack = tracks.find((t) =>
+    !t.removed && t.visible &&
+    t.meta?.boat === MY_BOAT.name &&
+    t.meta?.race?.name === active.race.name);
+  const sm = myTrack?.meta?.startMarks;
+  if (myTrack && sm?.rc && sm?.pin) {
+    const sample = sampleAt(myTrack, raceTime);
+    const ttl = timeToLinePredict(sample, sample.sog, sample.cog, sm);
+    if (ttl) {
+      const etaTxt = ttl.eta == null
+        ? `<span style="color:#94a3b8;">drifting</span>`
+        : `ETA <b>${ttl.eta.toFixed(0)}s</b>`;
+      let bufTxt = "";
+      if (ttl.eta != null && tToGun > 0) {
+        const buffer = tToGun - ttl.eta; // +ve = late, -ve = early
+        const cls = buffer < -2 ? "cd-buf-early"
+                  : buffer > 5 ? "cd-buf-late" : "cd-buf-ok";
+        const sign = buffer < 0 ? "" : "+";
+        const word = buffer < -2 ? "early"
+                   : buffer > 5 ? "late" : "on time";
+        bufTxt = ` · <span class="${cls}">${sign}${buffer.toFixed(0)}s ${word}</span>`;
+      }
+      tlInfo = `<div class="cd-tl">${MY_BOAT.name}: DTL <b>${ttl.distance.toFixed(0)}m</b> · ${etaTxt}${bufTxt}</div>`;
+    }
+  }
+
+  startCountdownEl.innerHTML = `
+    <div class="cd-label ${cdClass}">${cdText}</div>
+    <div class="cd-race">${active.race.title || active.race.name}</div>
+    ${tlInfo}`;
+}
+
+// ---------- "My boat" picker ----------
+// Populates from window.BOATS / window.BOAT_NAMES once races.js loads.
+const myBoatPicker = document.getElementById("myBoatPicker");
+function populateMyBoatPicker() {
+  if (!myBoatPicker) return;
+  const names = window.BOAT_NAMES || {};
+  const sails = Object.keys(names).sort((a, b) =>
+    (names[a] || a).localeCompare(names[b] || b));
+  if (!sails.length) {
+    myBoatPicker.innerHTML = `<option value="${MY_BOAT.sail}">${MY_BOAT.name}</option>`;
+    return;
+  }
+  myBoatPicker.innerHTML = sails.map((sail) => {
+    const name = names[sail] || sail;
+    return `<option value="${sail}|${name}" ${sail === MY_BOAT.sail ? "selected" : ""}>${name} (${sail})</option>`;
+  }).join("");
+}
+populateMyBoatPicker();
+myBoatPicker?.addEventListener("change", () => {
+  const [sail, name] = myBoatPicker.value.split("|");
+  MY_BOAT = { sail, name };
+  localStorage.setItem(MY_BOAT_KEY, JSON.stringify(MY_BOAT));
+  // Re-render everything that depends on MY_BOAT.
+  renderDayList();
+  if (activeDayKey) {
+    const k = activeDayKey;
+    activeDayKey = null;
+    selectDay(k);
+  }
+});
 
 // ---------- Mobile adjustments ----------
 // Small screens / touch devices: skip the particle animation and static

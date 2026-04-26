@@ -409,6 +409,53 @@ body { display: flex; }
 .tl-row.tl-hidden .tl-swatch { opacity: 0.25; }
 .tl-row.tl-hidden .tl-name { opacity: 0.45; text-decoration: line-through; }
 
+/* Start-line countdown overlay (top-center of map). Visible only in
+   the [start − 5 min, start + 30 s] window. */
+#startCountdown {
+  position: fixed;
+  top: 14px;
+  left: calc(320px + 50%);
+  transform: translateX(-50%);
+  background: rgba(15, 25, 36, 0.92);
+  color: #fff;
+  padding: 12px 22px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  text-align: center;
+  font-family: -apple-system, Segoe UI, sans-serif;
+  pointer-events: none;
+  min-width: 240px;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+@media (max-width: 768px), (pointer: coarse) {
+  #startCountdown { left: 50%; }
+}
+.cd-label {
+  font-size: 36px; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; letter-spacing: 1px;
+}
+.cd-label.cd-yellow { color: #facc15; }
+.cd-label.cd-orange { color: #fb923c; }
+.cd-label.cd-red    { color: #f87171; }
+.cd-label.cd-go     { color: #6fd06b; }
+.cd-race {
+  font-size: 11px; color: #b6c6d6; margin-top: 2px;
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.cd-tl {
+  font-size: 13px; color: #dbe7f3; margin-top: 8px;
+  font-variant-numeric: tabular-nums;
+  border-top: 1px solid rgba(255,255,255,0.15);
+  padding-top: 6px;
+}
+.cd-tl b { color: #fff; }
+.cd-buf-early { color: #f87171; font-weight: 700; }
+.cd-buf-late  { color: #facc15; font-weight: 700; }
+.cd-buf-ok    { color: #6fd06b; font-weight: 700; }
+
 /* Boat-click popup — translucent so other boats stay visible behind */
 .leaflet-popup.boat-popup .leaflet-popup-content-wrapper {
   background: rgba(15, 25, 36, 0.55);
