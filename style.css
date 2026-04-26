@@ -456,6 +456,27 @@ body { display: flex; }
 .cd-buf-late  { color: #facc15; font-weight: 700; }
 .cd-buf-ok    { color: #6fd06b; font-weight: 700; }
 
+/* Demo-mode floating overlay — shows over the map while the auto-tour is
+   running so the viewer of the recording knows what they're seeing. */
+#demoOverlay {
+  position: fixed; top: 14px; right: 14px; z-index: 1100;
+  background: rgba(15, 25, 36, 0.92); color: #fff;
+  padding: 10px 14px; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  font-family: -apple-system, Segoe UI, sans-serif; font-size: 12px;
+  max-width: 280px; line-height: 1.4;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+#demoOverlay strong { display: block; font-size: 14px; margin-bottom: 4px;
+  color: #6ea8ff; }
+#demoOverlay .demo-cta {
+  margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.15);
+  font-size: 13px; font-weight: 600; color: #facc15;
+}
+
 /* Boat-click popup — translucent so other boats stay visible behind */
 .leaflet-popup.boat-popup .leaflet-popup-content-wrapper {
   background: rgba(15, 25, 36, 0.55);

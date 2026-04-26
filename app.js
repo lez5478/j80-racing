@@ -3216,6 +3216,100 @@ myBoatPicker?.addEventListener("change", () => {
   }
 });
 
+// ---------- Record-demo auto-tour ----------
+// Walks through a fixed storyboard so the user can screen-record without
+// manually clicking. Default day = 2026-03-28 R3 Frostbite 12. Drives the
+// existing UI affordances (dropdown, race tab, play, scrub) so nothing is
+// special-cased — what the viewer sees is the real app.
+//
+// Storyboard captions live in DEMO_STEPS; the runner times them, advances
+// the playback clock, then shows a final upload-CTA card.
+const DEMO_STEPS = [
+  { atSec: 0,  caption: "<strong>RHKYC J/80 Race Replay</strong>Pick a race day &mdash; we'll watch <em>R3 Frostbite 12</em>, 28 March 2026." },
+  { atSec: 3,  caption: "<strong>Race scoreboard</strong>Live results pulled from the RHKYC PDF, with your boat highlighted." },
+  { atSec: 6,  caption: "<strong>Boat trail draws as the race unfolds</strong>Press play, watch the dashed track grow behind the boat." },
+  { atSec: 14, caption: "<strong>Live wind</strong>Real HKO wind across 30 stations interpolated to your position." },
+  { atSec: 22, caption: "<strong>Click any boat</strong>Translucent popup shows live SOG / COG / time." },
+  { atSec: 30, caption: "<strong>Race stats sidebar</strong>Tacks, gybes, mark roundings, polar %, heel, time-to-line." },
+];
+const DEMO_DAY = "2026-03-28";
+const DEMO_RACE = "R3";
+
+let demoOverlay = null;
+function showDemoOverlay(html) {
+  if (!demoOverlay) {
+    demoOverlay = document.createElement("div");
+    demoOverlay.id = "demoOverlay";
+    document.body.appendChild(demoOverlay);
+  }
+  demoOverlay.innerHTML = html;
+  demoOverlay.style.display = "block";
+}
+function hideDemoOverlay() {
+  if (demoOverlay) demoOverlay.style.display = "none";
+}
+
+let demoRunning = false;
+async function runDemo() {
+  if (demoRunning) return;
+  demoRunning = true;
+  try {
+    // 1. Make sure the right day is loaded.
+    if (activeDayKey !== DEMO_DAY) {
+      const sel = document.getElementById("daysPicker");
+      sel.value = DEMO_DAY;
+      sel.dispatchEvent(new Event("change"));
+      // Wait for tracks to land.
+      const t0 = Date.now();
+      while (Date.now() - t0 < 8000 && tracks.filter((t) => !t.removed).length === 0) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+    // 2. Switch to the demo race tab.
+    const pill = [...document.querySelectorAll(".race-tab")]
+      .find((b) => b.textContent.trim().startsWith(DEMO_RACE));
+    if (pill) pill.click();
+    await new Promise((r) => setTimeout(r, 600));
+    // 3. Reset clock to start, ensure 10× speed, press play.
+    if (raceStart != null) updateBoatsToRaceTime(raceStart);
+    speedMult = 10;
+    pbSpeed.value = "10";
+    if (!playing) {
+      playing = true;
+      playBtn.textContent = "❚❚";
+    }
+    // 4. Step through captions in real time. The race plays at 10× so a
+    // ~6-min real race takes ~36 sec of recording.
+    const startMs = performance.now();
+    for (const step of DEMO_STEPS) {
+      const wait = startMs + step.atSec * 1000 - performance.now();
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (!demoRunning) return;
+      showDemoOverlay(step.caption);
+    }
+    // 5. Wait for the race to finish (clock reaches raceEnd) or 60 s cap.
+    const cap = startMs + 60_000;
+    while (performance.now() < cap && playing) {
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    // 6. End card.
+    showDemoOverlay(
+      `<strong>Want to see your boat next to mine?</strong>` +
+      `Drop your VTK / GPX / TCX / Vakaros CSV at` +
+      `<div class="demo-cta">j80-racing.yafo78.workers.dev/upload</div>`,
+    );
+    await new Promise((r) => setTimeout(r, 5000));
+  } finally {
+    demoRunning = false;
+    setTimeout(hideDemoOverlay, 800);
+  }
+}
+
+document.getElementById("demoBtn")?.addEventListener("click", () => {
+  if (demoRunning) { demoRunning = false; hideDemoOverlay(); return; }
+  runDemo();
+});
+
 // ---------- Mobile adjustments ----------
 // Small screens / touch devices: skip the particle animation and static
 // wind grid by default — both are heavy and purely decorative. User can
