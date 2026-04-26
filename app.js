@@ -479,6 +479,7 @@ function addTrack(name, points, meta = {}) {
     li.classList.toggle("hidden", !track.visible);
     updateRaceClockBounds();
     renderTrackLegend();
+    renderRaceMarksOnMap();
   });
   li.querySelector("button").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -488,6 +489,7 @@ function addTrack(name, points, meta = {}) {
     if (selectedTrackId === id) selectTrack(null);
     updateRaceClockBounds();
     renderTrackLegend();
+    renderRaceMarksOnMap();
   });
   tracksEl.appendChild(li);
 
@@ -976,6 +978,7 @@ function renderTrackLegend() {
       // If we just hid the selected track, clear selection panels.
       if (selectedTrackId === tr.id && !tr.visible) selectTrack(null);
       updateRaceClockBounds();
+      renderRaceMarksOnMap();
     });
   }
 }
@@ -1010,6 +1013,7 @@ function applyRaceFilter() {
     selectTrack(null);
   }
   renderTrackLegend();
+  renderRaceMarksOnMap();
 }
 
 function renderRaceTabs() {
@@ -1544,6 +1548,82 @@ const rsManeuversGrid = document.querySelector("#rsManeuvers .rs-grid");
 const rsPerfGrid = document.querySelector("#rsPerf .rs-grid");
 const markRoundingsLayer = L.layerGroup().addTo(map);
 
+// Race-level mark store. Marks are physical objects in the water, NOT
+// boat-specific — so we compute them once per race using ALL visible
+// boats' tracks and render them while any of that race's tracks are
+// visible. More boats rounding the same mark = better averaged position
+// (each boat passes tangent to the mark; centroid converges).
+const raceMarks = new Map(); // race.name -> [{lat, lon, label, rounded[], n}]
+
+// Helper: average true-wind direction across an arbitrary point series.
+function avgWindFor(track, race) {
+  let avg = null, sx = 0, sy = 0, c = 0;
+  for (let i = 0; i < track.points.length; i += Math.max(1, Math.floor(track.points.length / 30))) {
+    const p = track.points[i];
+    const w = windAtBoatFn(p.t, p.lat, p.lon);
+    if (!w || w.deg == null) continue;
+    const r = w.deg * Math.PI / 180;
+    sx += Math.sin(r); sy += Math.cos(r); c++;
+  }
+  if (c > 0) avg = (Math.atan2(sx / c, sy / c) * 180 / Math.PI + 360) % 360;
+  if (avg == null && race?.date && window.WIND_DAILY?.[race.date]?.dir != null) {
+    avg = window.WIND_DAILY[race.date].dir;
+  }
+  return avg;
+}
+
+// Recompute the mark cache for the currently-loaded day. Should be called
+// once per day-load after all addTrack calls have run.
+function computeRaceMarksForDay() {
+  raceMarks.clear();
+  // Group tracks by race name.
+  const byRace = new Map();
+  for (const t of tracks) {
+    if (t.removed) continue;
+    const name = t.meta?.race?.name;
+    if (!name) continue;
+    if (!byRace.has(name)) byRace.set(name, { race: t.meta.race, tracks: [] });
+    byRace.get(name).tracks.push(t);
+  }
+  for (const [raceName, info] of byRace) {
+    const wind = avgWindFor(info.tracks[0], info.race);
+    const startSec = Date.parse(info.race.start) / 1000;
+    const endSec = info.race.end ? Date.parse(info.race.end) / 1000 : null;
+    const allEvents = [];
+    for (const t of info.tracks) {
+      const events = detectMarkRoundings(
+        t.points, startSec, endSec, wind, info.race.title);
+      for (const ev of events) allEvents.push(ev);
+    }
+    const marks = clusterMarks(allEvents, wind, 100);
+    raceMarks.set(raceName, marks);
+  }
+}
+
+// Refresh the mark icons on the map to match what's currently visible.
+function renderRaceMarksOnMap() {
+  markRoundingsLayer.clearLayers();
+  const visibleRaces = new Set();
+  for (const t of tracks) {
+    if (t.removed || !t.visible || !t.meta?.race?.name) continue;
+    visibleRaces.add(t.meta.race.name);
+  }
+  for (const raceName of visibleRaces) {
+    const marks = raceMarks.get(raceName) || [];
+    for (const m of marks) {
+      L.marker([m.lat, m.lon], {
+        icon: L.divIcon({
+          html: `<div class="mark-icon">${m.label}</div>`,
+          className: "", iconSize: [26, 26], iconAnchor: [13, 13],
+        }),
+        interactive: true, zIndexOffset: 300,
+      })
+      .bindTooltip(`${m.label} mark · ${raceName} · inferred from ${m.rounded.length} rounding${m.rounded.length > 1 ? "s" : ""}`)
+      .addTo(markRoundingsLayer);
+    }
+  }
+}
+
 function windAtBoatFn(t, lat, lon) {
   // Walk the on-map station markers for the closest hour and IDW from there.
   const samples = [];
@@ -1634,21 +1714,8 @@ function renderRaceStats(track) {
     ${heelRow}
   `;
 
-  // Plot UNIQUE marks (W, L, etc.) — multiple roundings of the same
-  // physical mark merge into one pin so a 2-lap course still shows
-  // exactly two marks on the map.
-  markRoundingsLayer.clearLayers();
-  stats.marks.forEach((m) => {
-    L.marker([m.lat, m.lon], {
-      icon: L.divIcon({
-        html: `<div class="mark-icon">${m.label}</div>`,
-        className: "", iconSize: [26, 26], iconAnchor: [13, 13],
-      }),
-      interactive: true, zIndexOffset: 300,
-    })
-    .bindTooltip(`Mark ${m.label} · rounded ${m.rounded.length}×`)
-    .addTo(markRoundingsLayer);
-  });
+  // Mark icons are race-level now (rendered by renderRaceMarksOnMap),
+  // not per-track — so we don't touch the map layer here.
 }
 
 function refreshReadout() {
@@ -2318,6 +2385,11 @@ async function selectDay(key) {
   }
 
   renderRaceTabs();
+
+  // Compute marks per race using ALL boats' tracks combined, then render
+  // them on the map. Marks persist while their race is visible.
+  computeRaceMarksForDay();
+  renderRaceMarksOnMap();
 
   // Default the scoreboard to the first race of the day so opening a day
   // immediately shows results alongside the track(s).
@@ -2997,6 +3069,8 @@ function clearTracks() {
   raceTabsEl.hidden = true;
   raceTabsEl.innerHTML = "";
   startCountdownEl.hidden = true;
+  raceMarks.clear();
+  markRoundingsLayer.clearLayers();
   renderTrackLegend();
 }
 
