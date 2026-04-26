@@ -281,6 +281,17 @@ const COLORS = [
   "#13c2c2", "#eb2f96", "#fa8c16", "#2f54eb", "#a0d911",
 ];
 let colorIdx = 0;
+// Stable colour per boat name — Meltemi is always red, Jelignite always
+// blue, etc. — so the same boat is the same colour across R1/R2/R3 of a
+// day and across multi-day comparisons.
+const boatColors = new Map();
+function colorForBoat(boatName) {
+  if (!boatName) return COLORS[colorIdx++ % COLORS.length];
+  if (!boatColors.has(boatName)) {
+    boatColors.set(boatName, COLORS[boatColors.size % COLORS.length]);
+  }
+  return boatColors.get(boatName);
+}
 const tracks = []; // { id, name, layer, line, points, color, visible, boat, ... }
 let selectedTrackId = null;
 
@@ -342,7 +353,7 @@ function addTrack(name, points, meta = {}) {
     statusEl.textContent = `⚠ ${name}: no GPS points`;
     return;
   }
-  const color = COLORS[colorIdx++ % COLORS.length];
+  const color = colorForBoat(meta?.boat);
   const latlngs = points.map((p) => [p.lat, p.lon]);
   // Trail polyline starts EMPTY — points are appended as the race clock
   // advances so you actually watch the boat draw its track during playback.

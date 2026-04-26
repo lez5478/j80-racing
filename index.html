@@ -47,9 +47,11 @@
       Particle animation
     </label>
   </div>
-  <h2>Tracks on map</h2>
   <div id="raceTabs" hidden></div>
-  <ul id="tracks"></ul>
+  <!-- Per-track list is rendered as the on-map legend (bottom-left of map);
+       sidebar entry kept hidden so existing code that references #tracks
+       still works without breaking. -->
+  <ul id="tracks" hidden></ul>
   <div id="scoreboard" hidden>
     <h2 class="sb-h2">
       <span class="sb-name">Race</span>
