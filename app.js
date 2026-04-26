@@ -2169,6 +2169,11 @@ async function selectDay(key) {
   renderDayList();
   renderWindForDay(key);
   renderWindBarb(key);
+  // Refresh wind-station markers to reflect the new day BEFORE any tracks
+  // load — otherwise yesterday's arrows linger on the map until the first
+  // boat rendering triggers updateBoatsToRaceTime → updateWindMap.
+  updateWindMap();
+  renderWindGrid();
 
   const files = days.get(key) || [];
   files.sort((a, b) => (a.webkitRelativePath || a.name).localeCompare(b.webkitRelativePath || b.name));
