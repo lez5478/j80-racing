@@ -2860,7 +2860,9 @@ function analyzeRace(track, race, startMarks, windAtBoatFn) {
     };
   }
 
-  // Average true-wind direction across the race for tack/gybe disambiguation.
+  // Average true-wind direction across the race for tack/gybe + mark
+  // detection. Try the IDW interpolation from on-map stations first
+  // (covers days where we have hourly HKO snapshots in R2/timeseries).
   let avgWindDeg = null;
   if (windAtBoatFn) {
     let sx = 0, sy = 0, c = 0;
@@ -2871,6 +2873,12 @@ function analyzeRace(track, race, startMarks, windAtBoatFn) {
       sx += Math.sin(r); sy += Math.cos(r); c++;
     }
     if (c > 0) avgWindDeg = (Math.atan2(sx / c, sy / c) * 180 / Math.PI + 360) % 360;
+  }
+  // Fallback: the daily Lamma chip in window.WIND_DAILY covers many older
+  // race days that the hourly snapshots don't. Same direction = same mark
+  // classification logic.
+  if (avgWindDeg == null && race?.date && window.WIND_DAILY?.[race.date]?.dir != null) {
+    avgWindDeg = window.WIND_DAILY[race.date].dir;
   }
 
   const { tacks, gybes } = detectTacksGybes(pts, avgWindDeg);
