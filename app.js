@@ -1600,27 +1600,46 @@ function computeRaceMarksForDay() {
   }
 }
 
-// Refresh the mark icons on the map to match what's currently visible.
-function renderRaceMarksOnMap() {
-  markRoundingsLayer.clearLayers();
-  const visibleRaces = new Set();
+// Pick the SINGLE race whose marks should currently show:
+//   1. If the user has selected a race tab (R1/R2/R3) → that race.
+//   2. Else (All tab) → the race whose time window contains the playback
+//      clock — so as you scrub from R1 into R2 the marks switch over.
+//   3. Else nothing — marks stay hidden.
+// Means we never show R1 + R2 marks together: less map clutter, no
+// confusion about which mark belongs to which race.
+function visibleRaceForMarks() {
+  if (activeRaceFilter) return activeRaceFilter;
+  if (raceTime == null) return null;
   for (const t of tracks) {
-    if (t.removed || !t.visible || !t.meta?.race?.name) continue;
-    visibleRaces.add(t.meta.race.name);
-  }
-  for (const raceName of visibleRaces) {
-    const marks = raceMarks.get(raceName) || [];
-    for (const m of marks) {
-      L.marker([m.lat, m.lon], {
-        icon: L.divIcon({
-          html: `<div class="mark-icon">${m.label}</div>`,
-          className: "", iconSize: [26, 26], iconAnchor: [13, 13],
-        }),
-        interactive: true, zIndexOffset: 300,
-      })
-      .bindTooltip(`${m.label} mark · ${raceName} · inferred from ${m.rounded.length} rounding${m.rounded.length > 1 ? "s" : ""}`)
-      .addTo(markRoundingsLayer);
+    if (t.removed || !t.meta?.race) continue;
+    const r = t.meta.race;
+    const startSec = Date.parse(r.start) / 1000;
+    const endSec = r.end ? Date.parse(r.end) / 1000 : startSec + 3600;
+    if (raceTime >= startSec - 60 && raceTime <= endSec + 120) {
+      return r.name;
     }
+  }
+  return null;
+}
+
+let lastRenderedMarksRace = null;
+function renderRaceMarksOnMap() {
+  const activeRaceName = visibleRaceForMarks();
+  if (activeRaceName === lastRenderedMarksRace) return;
+  lastRenderedMarksRace = activeRaceName;
+  markRoundingsLayer.clearLayers();
+  if (!activeRaceName) return;
+  const marks = raceMarks.get(activeRaceName) || [];
+  for (const m of marks) {
+    L.marker([m.lat, m.lon], {
+      icon: L.divIcon({
+        html: `<div class="mark-icon">${m.label}</div>`,
+        className: "", iconSize: [26, 26], iconAnchor: [13, 13],
+      }),
+      interactive: true, zIndexOffset: 300,
+    })
+    .bindTooltip(`${m.label} mark · ${activeRaceName} · inferred from ${m.rounded.length} rounding${m.rounded.length > 1 ? "s" : ""}`)
+    .addTo(markRoundingsLayer);
   }
 }
 
@@ -1864,6 +1883,7 @@ function updateBoatsToRaceTime(t) {
   renderWindGrid();
   tickGhosts();
   refreshStartCountdown();
+  renderRaceMarksOnMap();
   syncUrlState();
 }
 
@@ -3071,6 +3091,7 @@ function clearTracks() {
   startCountdownEl.hidden = true;
   raceMarks.clear();
   markRoundingsLayer.clearLayers();
+  lastRenderedMarksRace = null;
   renderTrackLegend();
 }
 
