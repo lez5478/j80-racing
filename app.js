@@ -1670,7 +1670,12 @@ function computeRaceMarksForDay() {
     for (const t of info.tracks) {
       const events = detectMarkRoundings(
         t.points, startSec, endSec, wind, info.race.title);
-      for (const ev of events) allEvents.push(ev);
+      // Tag each event with its boat so clusterMarks can require
+      // cross-boat agreement before declaring a real mark.
+      for (const ev of events) {
+        ev.boat = t.meta?.boat || t.name;
+        allEvents.push(ev);
+      }
     }
     const marks = clusterMarks(allEvents, wind, 100);
     raceMarks.set(raceName, marks);
@@ -2956,18 +2961,29 @@ function clusterMarks(events, windDeg, radius = 120) {
       c.label = `M${clusters.indexOf(c) + 1}`;
     }
   }
-  // If two clusters got the same W/L label, suffix them with a counter
-  // (rare — happens when a course has two windward marks).
+  // Consensus filter: a real mark must be supported by either
+  //   (a) ≥2 distinct boats rounding it (cross-boat agreement), or
+  //   (b) ≥2 roundings from the same boat (multi-lap evidence — most
+  //       races round the windward mark twice).
+  // This drops single-boat single-rounding events that are usually a
+  // misclassified gybe or tack rather than a real course mark.
+  const supported = clusters.filter((c) => {
+    const distinctBoats = new Set(c.rounded.map((idx) => events[idx].boat)).size;
+    return c.rounded.length >= 2 || distinctBoats >= 2;
+  });
+
+  // If two surviving clusters got the same W/L label, suffix them with a
+  // counter (rare — happens when a course has two windward marks).
   const counts = {};
-  for (const c of clusters) counts[c.label] = (counts[c.label] || 0) + 1;
+  for (const c of supported) counts[c.label] = (counts[c.label] || 0) + 1;
   const seen = {};
-  for (const c of clusters) {
+  for (const c of supported) {
     if (counts[c.label] > 1) {
       seen[c.label] = (seen[c.label] || 0) + 1;
       c.label = `${c.label}${seen[c.label]}`;
     }
   }
-  return clusters;
+  return supported;
 }
 
 // Sanity check on the printed J/80 Start time. Each finisher reports its
