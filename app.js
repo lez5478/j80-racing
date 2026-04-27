@@ -1207,6 +1207,7 @@ function selectTrack(id) {
     maneuversEl.hidden = true;
     polarPlotEl.hidden = true;
     gapChartEl.hidden = true;
+    coachReportEl.hidden = true;
     markRoundingsLayer.clearLayers();
     ghostsLayer.clearLayers();
     return;
@@ -1231,6 +1232,7 @@ function selectTrack(id) {
     renderManeuvers(_activeAnalysis.stats);
     renderPolarPlot(_activeAnalysis.stats.polar);
     renderGapChart(t);
+    renderCoachReport(t);
   }
 
   // If this track is tied to a race, show the race result row beneath
@@ -1269,6 +1271,424 @@ function selectTrack(id) {
   }
 
   refreshReadout();
+}
+
+// ---------- Coach report ----------
+// Synthesises the existing per-race analytics into plain-language
+// feedback grouped by topic: Start, Wind/strategy, Boat handling,
+// Maneuvers, Performance, Recommendations. Each section returns 0-3
+// observation strings with a sentiment ("good" / "warn" / "bad" / "info").
+// Persist per-race summaries for the season-trend view (#5).
+function recordSeasonStat(track, stats, race) {
+  if (!track?.meta?.boat || !race?.date || !race?.name) return;
+  const key = `sailing.history.${track.meta.boat}`;
+  let arr = [];
+  try { arr = JSON.parse(localStorage.getItem(key) || "[]"); } catch {}
+  // De-dupe by (date+race).
+  const id = `${race.date}/${race.name}`;
+  arr = arr.filter((r) => `${r.date}/${r.race}` !== id);
+  arr.push({
+    date: race.date, race: race.name, title: race.title || race.name,
+    polar: stats.avgPolarRatio,
+    tacks: stats.tacks.length,
+    gybes: stats.gybes.length,
+    heelMedian: stats.heelStats?.median ?? null,
+    avgLostKn: stats.tacks.length || stats.gybes.length
+      ? [...stats.tacks, ...stats.gybes].filter((m) => typeof m.lostKn === "number")
+          .reduce((s, m, _, a) => s + m.lostKn / a.length, 0)
+      : null,
+  });
+  if (arr.length > 100) arr = arr.slice(-100);
+  try { localStorage.setItem(key, JSON.stringify(arr)); } catch {}
+}
+
+function loadSeasonHistory(boat) {
+  if (!boat) return [];
+  try { return JSON.parse(localStorage.getItem(`sailing.history.${boat}`) || "[]"); }
+  catch { return []; }
+}
+
+function coachReport(track, stats, race) {
+  const obs = {
+    start: [], wind: [], boat: [], maneuvers: [],
+    performance: [], tactics: [], fleet: [], trend: [], recs: [],
+  };
+  const add = (group, level, text) => obs[group].push({ level, text });
+
+  recordSeasonStat(track, stats, race);
+
+  // ---- Start ----
+  if (stats.startLine) {
+    const sl = stats.startLine;
+    if (sl.ocs) {
+      add("start", "bad", `OCS — crossed the line ${Math.abs(sl.lateBy).toFixed(1)}s before the gun.`);
+    } else if (sl.lateBy != null) {
+      if (sl.lateBy < 3) add("start", "good", `On time at the gun (+${sl.lateBy.toFixed(1)}s).`);
+      else if (sl.lateBy < 10) add("start", "info", `Crossed +${sl.lateBy.toFixed(0)}s late — close enough.`);
+      else add("start", "warn", `Late by ${sl.lateBy.toFixed(0)}s at the gun.`);
+    }
+    if (sl.distAtGun > 50) add("start", "warn", `${sl.distAtGun.toFixed(0)}m from the line at the gun — too far back.`);
+    else if (sl.distAtGun < 20) add("start", "good", `Right on the line at the gun (${sl.distAtGun.toFixed(0)}m).`);
+    if (sl.sogAtGun < 2.5) add("start", "warn", `Stalled approach: ${sl.sogAtGun.toFixed(1)} kn at the gun. Build speed earlier.`);
+    else if (sl.sogAtGun > 4.5) add("start", "good", `Hit the line with full speed (${sl.sogAtGun.toFixed(1)} kn).`);
+  } else {
+    add("start", "info", "No start line pinged — can't grade the start.");
+  }
+
+  // ---- Wind / strategy ----
+  // Compare upwind COG between thirds of the race to detect shifts.
+  if (stats.avgWindDeg != null) {
+    const startSec = race ? Date.parse(race.start) / 1000 : track.tStart;
+    const endSec = race?.end ? Date.parse(race.end) / 1000 : track.tEnd;
+    const dur = endSec - startSec;
+    function upwindBearings(t0, t1) {
+      const port = [], stbd = [];
+      for (const p of track.points) {
+        if (p.t < t0 || p.t > t1 || p.sog < 2.5) continue;
+        let twa = p.cog - stats.avgWindDeg;
+        while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+        if (Math.abs(twa) > 70) continue; // not upwind
+        (twa < 0 ? port : stbd).push(p.cog);
+      }
+      const meanCog = (xs) => {
+        if (!xs.length) return null;
+        let sx = 0, sy = 0;
+        for (const c of xs) { const r = c * Math.PI / 180; sx += Math.sin(r); sy += Math.cos(r); }
+        return (Math.atan2(sx / xs.length, sy / xs.length) * 180 / Math.PI + 360) % 360;
+      };
+      return { port: meanCog(port), stbd: meanCog(stbd), n: port.length + stbd.length };
+    }
+    const a = upwindBearings(startSec, startSec + dur / 2);
+    const b = upwindBearings(startSec + dur / 2, endSec);
+    if (a.stbd != null && b.stbd != null && a.n > 60 && b.n > 30) {
+      let stbdShift = b.stbd - a.stbd;
+      while (stbdShift > 180) stbdShift -= 360; while (stbdShift < -180) stbdShift += 360;
+      if (Math.abs(stbdShift) > 8) {
+        const dir = stbdShift > 0 ? "right (clockwise)" : "left (counter-clockwise)";
+        add("wind", "info",
+          `Wind ${stbdShift > 0 ? "veered" : "backed"} ${Math.abs(stbdShift).toFixed(0)}° ${dir} between the first and second beat.`);
+        // Did the boat tack to capture the favoured shift?
+        // Simple heuristic: if the right shift was big (>10°), starboard tack got headed → port was lifted → boats should be on port.
+        // Find tacks during the 2nd beat and count port-vs-starboard time spent.
+        let portTime = 0, stbdTime = 0;
+        for (let i = 1; i < track.points.length; i++) {
+          const p = track.points[i];
+          if (p.t < startSec + dur / 2 || p.t > endSec) continue;
+          if (p.sog < 2.5) continue;
+          let twa = p.cog - stats.avgWindDeg;
+          while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+          if (Math.abs(twa) > 70) continue;
+          const dt = p.t - track.points[i - 1].t;
+          if (twa < 0) portTime += dt; else stbdTime += dt;
+        }
+        const favoured = stbdShift > 0 ? "port" : "starboard";
+        const time = stbdShift > 0 ? portTime : stbdTime;
+        const total = portTime + stbdTime;
+        if (total > 60 && time / total < 0.4) {
+          add("wind", "warn",
+            `Spent only ${Math.round(time / total * 100)}% of the second beat on the favoured ${favoured} tack — tactical opportunity missed.`);
+        } else if (total > 60 && time / total > 0.6) {
+          add("wind", "good",
+            `Caught the shift — ${Math.round(time / total * 100)}% of the second beat on the favoured ${favoured} tack.`);
+        }
+      } else {
+        add("wind", "info", "Wind direction stayed steady between beats.");
+      }
+    }
+  }
+
+  // ---- Boat handling (heel) ----
+  if (stats.heelStats) {
+    const h = stats.heelStats;
+    if (h.median > 27) add("boat", "warn", `Median heel ${h.median.toFixed(0)}° — over-heeling. Depower (ease main, flatten boat).`);
+    else if (h.median > 18 && h.median <= 25) add("boat", "good", `Median heel ${h.median.toFixed(0)}° — in the J/80 sweet spot (20-25°).`);
+    else if (h.median < 12) add("boat", "info", `Median heel ${h.median.toFixed(0)}° — under-heeling, light air.`);
+    if (h.max > 40) add("boat", "bad", `Max heel ${h.max.toFixed(0)}° — almost knocked down. Faster easing in gusts.`);
+    if (h.p90 - h.median > 18) add("boat", "warn", `Heel inconsistent (p90 ${h.p90.toFixed(0)}° vs median ${h.median.toFixed(0)}°) — gusts not being managed.`);
+  }
+
+  // ---- Maneuvers ----
+  const allMan = [...stats.tacks, ...stats.gybes];
+  if (allMan.length) {
+    const valid = allMan.filter((m) => typeof m.lostKn === "number" && typeof m.recoverySec === "number");
+    if (valid.length >= 3) {
+      const avgLost = valid.reduce((s, x) => s + x.lostKn, 0) / valid.length;
+      const avgRec = valid.reduce((s, x) => s + x.recoverySec, 0) / valid.length;
+      if (avgLost > 0.6) add("maneuvers", "warn", `Avg ${avgLost.toFixed(1)} kn lost per maneuver — heavy. Aim for <0.4 kn.`);
+      else if (avgLost < 0.3) add("maneuvers", "good", `Clean maneuvers — only ${avgLost.toFixed(1)} kn lost on average.`);
+      if (avgRec > 20) add("maneuvers", "warn", `Slow recovery (${avgRec.toFixed(0)}s avg). Roll-tack technique.`);
+      else if (avgRec < 10) add("maneuvers", "good", `Sharp recovery — back to speed in ${avgRec.toFixed(0)}s on average.`);
+      const worst = [...valid].sort((a, b) => b.lostKn - a.lostKn)[0];
+      if (worst && worst.lostKn > 1.5) {
+        const tStr = new Date(worst.t * 1000).toLocaleTimeString().slice(0, 5);
+        add("maneuvers", "info", `Worst maneuver at ${tStr}: lost ${worst.lostKn.toFixed(1)} kn, recovered in ${worst.recoverySec ?? "?"}s.`);
+      }
+    }
+    if (stats.tacks.length > 18) {
+      add("maneuvers", "info", `${stats.tacks.length} tacks in the race — high count, may suggest uncertain strategy.`);
+    }
+  }
+
+  // ---- Performance ----
+  if (stats.avgPolarRatio != null) {
+    const pct = stats.avgPolarRatio * 100;
+    if (pct >= 95) add("performance", "good", `Sailed ${pct.toFixed(0)}% of J/80 polar — elite pace.`);
+    else if (pct >= 85) add("performance", "info", `Sailed ${pct.toFixed(0)}% of polar — solid, room to push.`);
+    else if (pct >= 75) add("performance", "warn", `${pct.toFixed(0)}% of polar — speed gap of ~0.5 kn vs target.`);
+    else add("performance", "bad", `${pct.toFixed(0)}% of polar — significant speed deficit. Sail trim & helming.`);
+  }
+
+  // ---- Tactics: line bias (#7), layline (#1), mark approach loss (#4) ----
+  // Line bias: angle between the start line and perpendicular-to-wind.
+  // Boat at the upwind end of the line gets a "free" few metres upwind.
+  if (track.meta?.startMarks?.rc && track.meta?.startMarks?.pin && stats.avgWindDeg != null) {
+    const rc = track.meta.startMarks.rc;
+    const pin = track.meta.startMarks.pin;
+    const lat0 = (rc.lat + pin.lat) / 2;
+    const dLat = (pin.lat - rc.lat) * 111_320;
+    const dLon = (pin.lon - rc.lon) * 111_320 * Math.cos(lat0 * Math.PI / 180);
+    // Bearing from RC to PIN (the line direction, 0 = north, clockwise).
+    const lineBearing = (Math.atan2(dLon, dLat) * 180 / Math.PI + 360) % 360;
+    // Wind is FROM avgWindDeg; perpendicular-to-wind is wind ± 90°.
+    let bias = lineBearing - (stats.avgWindDeg + 90);
+    while (bias > 90) bias -= 180; while (bias < -90) bias += 180;
+    // Convert "bias degrees" to metres of upwind advantage:
+    //   one end is upwind by sin(bias) * lineLength
+    const lineLen = Math.sqrt(dLat * dLat + dLon * dLon);
+    const upwindAdvM = Math.abs(Math.sin(bias * Math.PI / 180)) * lineLen;
+    if (Math.abs(bias) >= 5) {
+      const favouredEnd = bias > 0 ? "PIN" : "RC";
+      add("tactics", "info",
+        `Line was biased ${Math.abs(bias).toFixed(0)}° — ${favouredEnd} end was favoured by ~${upwindAdvM.toFixed(0)}m of upwind.`);
+      // Where did the boat actually start?
+      const startSec = race ? Date.parse(race.start) / 1000 : track.tStart;
+      const sample = sampleAt(track, startSec);
+      // Project start position onto the line, get fraction RC→PIN
+      const sx = (sample.lon - rc.lon) * 111_320 * Math.cos(lat0 * Math.PI / 180);
+      const sy = (sample.lat - rc.lat) * 111_320;
+      const proj = (sx * dLon + sy * dLat) / (lineLen * lineLen);
+      const onPin = bias > 0 ? proj > 0.66 : proj < 0.33;
+      const onWrong = bias > 0 ? proj < 0.33 : proj > 0.66;
+      if (onPin) add("tactics", "good", `Started near the favoured ${favouredEnd} end.`);
+      else if (onWrong) add("tactics", "warn", `Started at the disfavoured end — gave up ~${upwindAdvM.toFixed(0)}m at the gun.`);
+      else add("tactics", "info", `Started in the middle of the line.`);
+    }
+  }
+
+  // Layline analysis (#1): for each mark approach, was the last tack
+  // before the rounding "on the layline" or did the boat overstand?
+  // Heuristic: look at boat position 60s before the rounding. Project
+  // forward at current heading. If projected line passes >25 m to the
+  // upwind side of the mark, boat overstood.
+  if (stats.marks && stats.marks.length) {
+    let overstandCount = 0;
+    for (const m of stats.marks) {
+      // Find sample 60s before the closest-approach time.
+      let closestT = null, closestD = Infinity;
+      for (const p of track.points) {
+        if (p.t > track.tEnd) break;
+        const dLat = (p.lat - m.lat) * 111_320;
+        const dLon = (p.lon - m.lon) * 111_320 * Math.cos(p.lat * Math.PI / 180);
+        const d = Math.sqrt(dLat * dLat + dLon * dLon);
+        if (d < closestD) { closestD = d; closestT = p.t; }
+      }
+      if (closestT == null) continue;
+      const before = sampleAt(track, closestT - 60);
+      // Distance to mark at -60s
+      const dLat = (m.lat - before.lat) * 111_320;
+      const dLon = (m.lon - before.lon) * 111_320 * Math.cos(before.lat * Math.PI / 180);
+      const distToMark = Math.sqrt(dLat * dLat + dLon * dLon);
+      // Bearing from boat to mark
+      const bearingToMark = (Math.atan2(dLon, dLat) * 180 / Math.PI + 360) % 360;
+      // Difference between boat heading and bearing-to-mark
+      let diff = before.cog - bearingToMark;
+      while (diff > 180) diff -= 360; while (diff < -180) diff += 360;
+      // If the boat had to bear OFF (head down) significantly to reach
+      // the mark, they overstood.
+      if (Math.abs(diff) > 18 && distToMark > 50) {
+        overstandCount++;
+      }
+    }
+    if (overstandCount > 0) {
+      add("tactics", "warn", `Overstood ${overstandCount} mark${overstandCount > 1 ? "s" : ""} — sailed extra distance.`);
+    } else if (stats.marks.length) {
+      add("tactics", "good", "Hit laylines cleanly at every mark.");
+    }
+  }
+
+  // Mark approach loss (#4): SOG drop in the 30s window before each rounding.
+  if (stats.marks && stats.marks.length) {
+    const losses = [];
+    for (const m of stats.marks) {
+      // Find time of closest approach
+      let cT = null, cD = Infinity;
+      for (const p of track.points) {
+        const dLat = (p.lat - m.lat) * 111_320;
+        const dLon = (p.lon - m.lon) * 111_320 * Math.cos(p.lat * Math.PI / 180);
+        const d = Math.sqrt(dLat * dLat + dLon * dLon);
+        if (d < cD) { cD = d; cT = p.t; }
+      }
+      if (cT == null) continue;
+      const range = (a, b) => {
+        let s = 0, c = 0;
+        for (const p of track.points) {
+          if (p.t < cT + a) continue;
+          if (p.t > cT + b) break;
+          s += p.sog; c++;
+        }
+        return c ? s / c : null;
+      };
+      const baseline = range(-90, -30);
+      const approach = range(-30, 0);
+      if (baseline != null && approach != null) {
+        const loss = baseline - approach;
+        if (loss > 0.4) losses.push({ label: m.label, loss });
+      }
+    }
+    if (losses.length) {
+      const worst = losses.reduce((a, b) => a.loss > b.loss ? a : b);
+      add("tactics", "warn",
+        `Slowed ${worst.loss.toFixed(1)} kn in the 30s before mark ${worst.label} — bad approach line / wind shadow.`);
+    }
+  }
+
+  // ---- Fleet (#2 rank trajectory, #3 vs leaders, #9 boat-on-boat) ----
+  const otherTracksThisRace = tracks.filter((t) =>
+    !t.removed && t.id !== track.id &&
+    t.meta?.race?.name === race?.name);
+  if (otherTracksThisRace.length) {
+    // Compute progress (cumulative metres sailed) for me and each other
+    // boat at each second of the race; track rank changes.
+    const startSec = race ? Date.parse(race.start) / 1000 : track.tStart;
+    const endSec = race?.end ? Date.parse(race.end) / 1000 : track.tEnd;
+    const all = [track, ...otherTracksThisRace];
+    const passes = []; // { tSec, who, dir }   dir: "passed"|"got passed"
+    let prevRanks = null;
+    for (let t = startSec; t <= endSec; t += 30) {
+      const progArr = all.map((tr) => ({
+        boat: tr.meta?.boat || tr.name, p: boatProgressAt(tr, t),
+      }));
+      progArr.sort((a, b) => b.p - a.p);
+      const ranks = {};
+      progArr.forEach((x, i) => { ranks[x.boat] = i + 1; });
+      if (prevRanks) {
+        const myBoat = track.meta?.boat;
+        const myPrev = prevRanks[myBoat];
+        const myNow = ranks[myBoat];
+        if (myNow !== myPrev) {
+          // Find which boat we swapped with
+          for (const o of otherTracksThisRace) {
+            const ob = o.meta?.boat;
+            if (prevRanks[ob] !== ranks[ob]) {
+              if (myNow < myPrev) passes.push({ t, who: ob, dir: "passed" });
+              else passes.push({ t, who: ob, dir: "got passed by" });
+            }
+          }
+        }
+      }
+      prevRanks = ranks;
+    }
+    if (passes.length) {
+      const summary = passes.slice(0, 3).map((p) =>
+        `${p.dir} ${p.who} at ${new Date(p.t * 1000).toLocaleTimeString().slice(0, 5)}`).join("; ");
+      add("fleet", "info", `Boat-on-boat: ${summary}.`);
+    }
+    // Tack count vs other tracks for this race.
+    for (const o of otherTracksThisRace) {
+      // Naive: count visible_tacks count on `o` if available — we'd need
+      // to recompute. Skip if we don't have per-track stats cached.
+    }
+    // Final position at finish.
+    const finishProg = all.map((tr) => ({
+      boat: tr.meta?.boat || tr.name, p: boatProgressAt(tr, endSec),
+    })).sort((a, b) => b.p - a.p);
+    const finalRank = finishProg.findIndex((x) => x.boat === track.meta?.boat) + 1;
+    if (finalRank > 0) {
+      add("fleet", "info",
+        `Finished ${finalRank} of ${all.length} boats with tracks loaded.`);
+    }
+  } else {
+    add("fleet", "info", "Fleet comparison unavailable — no other boats' tracks loaded for this race.");
+  }
+
+  // ---- Season trend (#5) ----
+  const history = loadSeasonHistory(track.meta?.boat);
+  if (history.length >= 3) {
+    // Average polar / tacks / heel across previous races (excluding this one).
+    const id = `${race?.date}/${race?.name}`;
+    const prev = history.filter((r) => `${r.date}/${r.race}` !== id);
+    if (prev.length >= 2) {
+      const avg = (key) => {
+        const vals = prev.map((r) => r[key]).filter((v) => typeof v === "number");
+        return vals.length ? vals.reduce((s, x) => s + x, 0) / vals.length : null;
+      };
+      const polarAvg = avg("polar");
+      const tacksAvg = avg("tacks");
+      const heelAvg = avg("heelMedian");
+      if (polarAvg != null && stats.avgPolarRatio != null) {
+        const delta = (stats.avgPolarRatio - polarAvg) * 100;
+        const dir = delta > 1 ? "above" : delta < -1 ? "below" : "around";
+        add("trend", delta > 0 ? "good" : delta < -3 ? "warn" : "info",
+          `Polar ${(stats.avgPolarRatio * 100).toFixed(0)}% — ${dir} your ${prev.length}-race avg of ${(polarAvg * 100).toFixed(0)}%.`);
+      }
+      if (tacksAvg != null) {
+        const tDelta = stats.tacks.length - tacksAvg;
+        if (Math.abs(tDelta) > 3)
+          add("trend", "info", `${stats.tacks.length} tacks vs your typical ${tacksAvg.toFixed(0)}.`);
+      }
+      if (heelAvg != null && stats.heelStats?.median != null) {
+        const hDelta = stats.heelStats.median - heelAvg;
+        if (Math.abs(hDelta) > 4)
+          add("trend", "info", `Heeled ${stats.heelStats.median.toFixed(0)}° vs your typical ${heelAvg.toFixed(0)}°.`);
+      }
+    }
+  } else {
+    add("trend", "info", "Season trend builds up after 3+ races analysed for this boat.");
+  }
+
+  // ---- Recommendations (synthesise) ----
+  // High-priority issues first.
+  if (stats.startLine?.ocs)
+    obs.recs.push({ level: "bad", text: "Practice timing the start sequence — countdown discipline." });
+  if (stats.heelStats?.max > 35)
+    obs.recs.push({ level: "warn", text: "Crew heel-management drills: ease the main early in gusts." });
+  if (allMan.filter((m) => m.lostKn > 1).length >= 3)
+    obs.recs.push({ level: "warn", text: "Tack technique: target <0.5 kn loss per tack with proper roll." });
+  if (stats.avgPolarRatio != null && stats.avgPolarRatio < 0.85)
+    obs.recs.push({ level: "info", text: "Compare polar curves with leaders to find underperforming wind angle." });
+  if (!obs.recs.length)
+    obs.recs.push({ level: "good", text: "No major issues — solid race." });
+
+  return obs;
+}
+
+const COACH_TITLES = {
+  start: "🎯 Start",
+  tactics: "🧭 Tactics",
+  wind: "💨 Wind & strategy",
+  boat: "⛵ Boat handling",
+  maneuvers: "🔄 Maneuvers",
+  performance: "📈 Performance",
+  fleet: "🤝 Fleet",
+  trend: "📊 Season trend",
+  recs: "💡 Recommendations",
+};
+
+const coachReportEl = document.getElementById("coachReport");
+function renderCoachReport(track) {
+  if (!track || track.removed) { coachReportEl.hidden = true; return; }
+  const stats = _activeAnalysis?.stats;
+  if (!stats) { coachReportEl.hidden = true; return; }
+  const obs = coachReport(track, stats, track.meta?.race);
+  coachReportEl.hidden = false;
+  const sections = Object.keys(COACH_TITLES).map((k) => {
+    if (!obs[k] || !obs[k].length) return "";
+    const items = obs[k].map((o) =>
+      `<li class="cr-${o.level}">${o.text}</li>`).join("");
+    return `<div class="cr-sec"><div class="cr-sec-title">${COACH_TITLES[k]}</div><ul>${items}</ul></div>`;
+  }).join("");
+  coachReportEl.innerHTML = `<h2>Coach report · ${track.meta?.boat || ""}</h2>` +
+    `<div class="cr-body">${sections}</div>`;
 }
 
 // ---------- Wind shift sparkline ----------

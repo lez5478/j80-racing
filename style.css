@@ -292,6 +292,34 @@ body { display: flex; }
   border: 1px solid #264168; border-radius: 6px; display: block; }
 .gc-info { font-size: 10px; color: #8aa0b6; margin-top: 4px; }
 
+/* Coach report */
+#coachReport { margin-top: 12px; }
+#coachReport h2 { margin: 0 0 6px; }
+.cr-body {
+  background: #16263a; border: 1px solid #264168; border-radius: 6px;
+  padding: 10px 12px; font-size: 12px;
+}
+.cr-sec { margin-bottom: 10px; }
+.cr-sec:last-child { margin-bottom: 0; }
+.cr-sec-title {
+  font-size: 11px; font-weight: 600; color: #b6c6d6;
+  margin-bottom: 4px;
+}
+.cr-body ul { list-style: none; padding: 0; margin: 0; }
+.cr-body li {
+  padding: 3px 0 3px 14px;
+  position: relative;
+  line-height: 1.4;
+}
+.cr-body li::before {
+  position: absolute; left: 0; top: 3px;
+  font-size: 10px;
+}
+.cr-body li.cr-good   { color: #cfeac4; } .cr-body li.cr-good::before   { content: "✓"; color: #6fd06b; }
+.cr-body li.cr-info   { color: #cbd5e1; } .cr-body li.cr-info::before   { content: "•"; color: #6ea8ff; }
+.cr-body li.cr-warn   { color: #fde68a; } .cr-body li.cr-warn::before   { content: "!"; color: #facc15; font-weight:700; }
+.cr-body li.cr-bad    { color: #fecaca; } .cr-body li.cr-bad::before    { content: "✗"; color: #f87171; font-weight:700; }
+
 /* Race stats panel */
 #raceStats { margin-top: 12px; }
 .rs-body {
