@@ -331,15 +331,12 @@ function boatPopupHtml(track, sample) {
     ? `${race.name}${race.title ? " · " + race.title : ""}`
     : "";
   return `
-    <div style="font-family: -apple-system, Segoe UI, sans-serif; min-width: 140px; color: #fff;">
-      <div style="font-weight:700; color:${track.color}; font-size:13px; text-shadow: 0 1px 2px rgba(0,0,0,0.7);">
-        ${boatName}${sailNo ? ` <span style="color:#cbd5e1;font-weight:400;font-size:11px;">${sailNo}</span>` : ""}
+    <div style="font-family:-apple-system,Segoe UI,sans-serif;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,0.7);">
+      <div style="font-weight:700;color:${track.color};font-size:12px;">
+        ${boatName}${sailNo ? ` <span style="color:#cbd5e1;font-weight:400;font-size:10px;">${sailNo}</span>` : ""}
       </div>
-      ${subtitle ? `<div style="color:#cbd5e1;font-size:11px;margin-bottom:4px;text-shadow:0 1px 2px rgba(0,0,0,0.7);">${subtitle}</div>` : ""}
-      <div style="display:grid;grid-template-columns:auto 1fr;gap:2px 10px;font-size:12px;font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,0.7);">
-        <span style="color:#94a3b8;">SOG</span><span><b>${sogKn}</b> kn</span>
-        <span style="color:#94a3b8;">COG</span><span><b>${cog}</b>°</span>
-        <span style="color:#94a3b8;">Time</span><span>${tStr}</span>
+      <div style="font-size:11px;font-variant-numeric:tabular-nums;margin-top:2px;">
+        <b>${sogKn}</b> kn · <b>${cog}</b>°
       </div>
     </div>`;
 }
@@ -394,7 +391,17 @@ function addTrack(name, points, meta = {}) {
   });
   // Lightweight live popup — name + current SOG/COG. Refreshed from
   // updateBoatsToRaceTime() while open.
-  boat.bindPopup("", { offset: [0, -8], autoPan: false, className: "boat-popup" });
+  // Offset to the upper-right (instead of straight up) so the popup
+  // doesn't blanket the boats clustered just behind/below this one.
+  // Pointer-events disabled lets you keep clicking through to nearby
+  // markers even while the popup is open.
+  boat.bindPopup("", {
+    offset: [20, -8],
+    autoPan: false,
+    className: "boat-popup",
+    closeOnClick: false,
+    closeButton: true,
+  });
 
   const layerChildren = [line, start, boat];
 
@@ -2822,9 +2829,16 @@ function detectMarkRoundings(points, raceStartSec, raceEndSec, windDeg, raceTitl
   }
 
   // Walk and find transitions where smoothed TWA crosses 90°.
+  // Two stricter checks vs the naive "any single crossing" approach:
+  //   * CONFIRM the new state holds for ≥ 60 s of subsequent samples —
+  //     drops tactical wobbles that briefly look like leg flips.
+  //   * DEEP CROSSING — the new state must reach ≥ 50° away from the 90°
+  //     line (i.e. truly upwind/downwind, not just a reach segment).
   const tStart = raceStartSec ?? points[0].t;
   const tEnd = raceEndSec ?? points[points.length - 1].t;
-  const MIN_GAP = 90; // sec between detections
+  const MIN_GAP = 90;
+  const CONFIRM_SEC = 60;
+  const DEEP_SWING_DEG = 50;
   const out = [];
   let lastEvent = -Infinity;
   for (let i = 1; i < points.length; i++) {
@@ -2833,7 +2847,18 @@ function detectMarkRoundings(points, raceStartSec, raceEndSec, windDeg, raceTitl
     if (points[i].t - lastEvent < MIN_GAP) continue;
     const prev = smoothed[i - 1], curr = smoothed[i];
     if ((prev < 90) === (curr < 90)) continue;     // not a crossing
-    const isWindward = prev < 90;                  // upwind → downwind = W mark
+    // Stickiness test — does the new state hold? And does it go DEEP?
+    const newUp = curr < 90;
+    let stable = true, peak = 0;
+    for (let j = i + 1; j < points.length; j++) {
+      if (points[j].t > points[i].t + CONFIRM_SEC) break;
+      if ((smoothed[j] < 90) !== newUp) { stable = false; break; }
+      const dev = newUp ? (90 - smoothed[j]) : (smoothed[j] - 90);
+      if (dev > peak) peak = dev;
+    }
+    if (!stable) continue;
+    if (peak < DEEP_SWING_DEG) continue;
+    const isWindward = prev < 90;                  // upwind to downwind = W mark
     // Refine the rounding position: average GPS over ±10 s around the
     // crossing, plus a 5 m port-side nudge for the mark's inside-of-curve.
     const cT = points[i].t;
