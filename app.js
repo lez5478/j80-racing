@@ -372,14 +372,17 @@ function addTrack(name, points, meta = {}) {
     color, weight: 3, opacity: 0.95,
     dashArray: "6 5",
   });
+  // Tooltip uses just the boat name — race context is already obvious
+  // from the active race tab and start-countdown panel.
+  const tipBoat = meta?.boat || name;
   const start = L.circleMarker(latlngs[0], {
     radius: 5, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1,
-  }).bindTooltip(`Start: ${name}`);
+  }).bindTooltip(`Start: ${tipBoat}`);
 
   const maxSog = points.reduce((m, p) => Math.max(m, p.sog || 0), 0);
   const duration = points[points.length - 1].t - points[0].t;
   line.bindTooltip(
-    `${name}<br>${points.length} pts · ${humanDuration(duration)} · max ${maxSog.toFixed(1)} kn`,
+    `${tipBoat} · ${humanDuration(duration)} · max ${maxSog.toFixed(1)} kn`,
     { sticky: true }
   );
 
