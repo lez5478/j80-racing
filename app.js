@@ -499,7 +499,7 @@ function addTrack(name, points, meta = {}) {
     li.classList.toggle("hidden", !track.visible);
     updateRaceClockBounds();
     renderTrackLegend();
-    renderRaceMarksOnMap();
+    renderRaceMarksOnMap(); renderFinishLineOnMap();
   });
   li.querySelector("button").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -509,7 +509,7 @@ function addTrack(name, points, meta = {}) {
     if (selectedTrackId === id) selectTrack(null);
     updateRaceClockBounds();
     renderTrackLegend();
-    renderRaceMarksOnMap();
+    renderRaceMarksOnMap(); renderFinishLineOnMap();
   });
   tracksEl.appendChild(li);
 
@@ -1055,7 +1055,7 @@ function renderTrackLegend() {
         selectTrack(null);
       }
       updateRaceClockBounds();
-      renderRaceMarksOnMap();
+      renderRaceMarksOnMap(); renderFinishLineOnMap();
       renderTrackLegend();
     });
   }
@@ -1100,7 +1100,7 @@ function applyRaceFilter() {
     selectTrack(null);
   }
   renderTrackLegend();
-  renderRaceMarksOnMap();
+  renderRaceMarksOnMap(); renderFinishLineOnMap();
 }
 
 function renderRaceTabs() {
@@ -2062,6 +2062,15 @@ const markRoundingsLayer = L.layerGroup().addTo(map);
 // (each boat passes tangent to the mark; centroid converges).
 const raceMarks = new Map(); // race.name -> [{lat, lon, label, rounded[], n}]
 
+// Race-level finish-line store. Inferred from:
+//   • RC end position (anchored committee boat = same as the start line's RC)
+//   • Each finisher's GPS position at their printed finish time
+// All crossings should lie on a straight line passing through the RC.
+// We average the bearings from RC to each crossing → line direction;
+// pin end placed at the furthest crossing along that direction + small
+// buffer for visibility.
+const raceFinishLines = new Map(); // race.name -> { rc, pin, crossings: [{sail, place, lat, lon}] }
+
 // Helper: average true-wind direction across an arbitrary point series.
 function avgWindFor(track, race) {
   let avg = null, sx = 0, sy = 0, c = 0;
@@ -2109,6 +2118,92 @@ function computeRaceMarksForDay() {
     }
     const marks = clusterMarks(allEvents, wind, 100);
     raceMarks.set(raceName, marks);
+    // Also infer the finish line from boat crossings at their printed
+    // finish times — uses the same anchored RC as the start line.
+    const fl = computeFinishLineForRace(info.race, info.tracks);
+    if (fl) raceFinishLines.set(raceName, fl);
+  }
+}
+
+// Infer the finish line for one race: take the (anchored) RC end and the
+// GPS positions where each loaded boat crossed at their printed finish
+// time. The line passes through RC at the AVERAGE bearing to the
+// crossings, extending past the furthest one for visibility.
+function computeFinishLineForRace(race, raceTracks) {
+  if (!race?.finishers?.length) return null;
+  let rc = null;
+  for (const t of raceTracks) {
+    if (t.meta?.startMarks?.rc) { rc = t.meta.startMarks.rc; break; }
+  }
+  if (!rc) return null;
+  const names = window.BOAT_NAMES || {};
+  const crossings = [];
+  for (const f of race.finishers) {
+    const boatName = names[f.sail];
+    if (!boatName) continue;
+    const tr = raceTracks.find((t) => t.meta?.boat === boatName);
+    if (!tr) continue;
+    const finishSec = Date.parse(`${race.date}T${f.finish}+08:00`) / 1000;
+    if (!isFinite(finishSec)) continue;
+    if (finishSec < tr.points[0].t || finishSec > tr.points[tr.points.length - 1].t) continue;
+    const s = sampleAt(tr, finishSec);
+    crossings.push({ sail: f.sail, place: f.place, boat: boatName, lat: s.lat, lon: s.lon });
+  }
+  if (!crossings.length) return null;
+  const lat0 = rc.lat;
+  const mLat = 111_320, mLon = 111_320 * Math.cos(lat0 * Math.PI / 180);
+  let sx = 0, sy = 0;
+  for (const c of crossings) {
+    const dx = (c.lon - rc.lon) * mLon;
+    const dy = (c.lat - rc.lat) * mLat;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len < 0.5) continue;
+    sx += dx / len; sy += dy / len;
+  }
+  const norm = Math.sqrt(sx * sx + sy * sy);
+  if (norm < 0.001) return null;
+  const ux = sx / norm, uy = sy / norm;
+  let maxProj = 0;
+  for (const c of crossings) {
+    const dx = (c.lon - rc.lon) * mLon;
+    const dy = (c.lat - rc.lat) * mLat;
+    const proj = dx * ux + dy * uy;
+    if (proj > maxProj) maxProj = proj;
+  }
+  if (maxProj < 5) maxProj = 50;
+  const pinM = maxProj + 8;
+  const pin = {
+    lat: rc.lat + uy * pinM / mLat,
+    lon: rc.lon + ux * pinM / mLon,
+  };
+  return { rc, pin, crossings };
+}
+
+const raceFinishLineLayer = L.layerGroup().addTo(map);
+let lastRenderedFinishRace = null;
+function renderFinishLineOnMap() {
+  const activeRaceName = visibleRaceForMarks();
+  if (activeRaceName === lastRenderedFinishRace) return;
+  lastRenderedFinishRace = activeRaceName;
+  raceFinishLineLayer.clearLayers();
+  if (!activeRaceName) return;
+  const fl = raceFinishLines.get(activeRaceName);
+  if (!fl) return;
+  L.polyline([[fl.rc.lat, fl.rc.lon], [fl.pin.lat, fl.pin.lon]], {
+    color: "#a78bfa", weight: 2.5, opacity: 0.95, dashArray: "8 4",
+  }).bindTooltip(`Finish line · ${activeRaceName} · inferred from ${fl.crossings.length} boat${fl.crossings.length > 1 ? "s" : ""}`)
+    .addTo(raceFinishLineLayer);
+  L.circleMarker([fl.pin.lat, fl.pin.lon], {
+    radius: 5, weight: 2, color: "#0f1924",
+    fillColor: "#a78bfa", fillOpacity: 1,
+  }).bindTooltip("Finish pin (inferred)")
+    .addTo(raceFinishLineLayer);
+  for (const c of fl.crossings) {
+    L.circleMarker([c.lat, c.lon], {
+      radius: 3, weight: 1, color: "#0f1924",
+      fillColor: "#fde047", fillOpacity: 0.9,
+    }).bindTooltip(`P${c.place} · ${c.boat} crossed here`)
+      .addTo(raceFinishLineLayer);
   }
 }
 
@@ -2401,7 +2496,7 @@ function updateBoatsToRaceTime(t) {
   renderWindGrid();
   tickGhosts();
   refreshStartCountdown();
-  renderRaceMarksOnMap();
+  renderRaceMarksOnMap(); renderFinishLineOnMap();
   tickTrackLegend();
   syncUrlState();
 }
@@ -2924,7 +3019,7 @@ async function selectDay(key) {
   // Compute marks per race using ALL boats' tracks combined, then render
   // them on the map. Marks persist while their race is visible.
   computeRaceMarksForDay();
-  renderRaceMarksOnMap();
+  renderRaceMarksOnMap(); renderFinishLineOnMap();
 
   // Default the scoreboard to the first race of the day so opening a day
   // immediately shows results alongside the track(s).
@@ -3646,8 +3741,11 @@ function clearTracks() {
   raceTabsEl.innerHTML = "";
   startCountdownEl.hidden = true;
   raceMarks.clear();
+  raceFinishLines.clear();
   markRoundingsLayer.clearLayers();
+  raceFinishLineLayer.clearLayers();
   lastRenderedMarksRace = null;
+  lastRenderedFinishRace = null;
   renderTrackLegend();
 }
 
