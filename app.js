@@ -3140,26 +3140,38 @@ function analyzeRace(track, race, startMarks, windAtBoatFn) {
 }
 
 // Carry start-line marks across a day's races. Domain knowledge from the
-// fleet: the committee boat is anchored after race 1, so the same RC/PIN
-// is reused for race 2 / 3 unless the helmsman re-pings (common when the
-// RC moves the line for a wind shift). We walk all button events in order
-// and snapshot the running (rc, pin) at each race's start + 1-minute grace.
-// Returns an array of { rc, pin } | null aligned with `raceStartsSec`.
+// fleet: the committee boat is anchored once and stays put (it might
+// shift slightly between races for a wind change, but the same line is
+// reused unless re-pinged).
+//
+// Two passes:
+//   1. FORWARD — at each race, snapshot the latest RC/PIN that fired
+//      before the race's gun (with a 1-minute grace). Race 1 might have
+//      neither yet if the helmsman pinged after the start sequence.
+//   2. BACKWARD FILL — for any race still missing rc/pin, borrow from
+//      the NEXT race that has it. The anchored committee boat hasn't
+//      moved, so a ping before R3 is just as valid for R1 and R2.
+//
+// Returns an array of { rc, pin } | null aligned with raceStartsSec.
 function startLinesForDay(buttons, raceStartsSec) {
   const out = [];
-  let rc = null, pin = null;
-  let evIdx = 0;
+  let rc = null, pin = null, evIdx = 0;
   for (const start of raceStartsSec) {
-    const cutoff = start + 60; // 1-min grace past the gun
+    const cutoff = start + 60;
     while (evIdx < buttons.length && buttons[evIdx].t <= cutoff) {
       const ev = buttons[evIdx++];
       if (ev.type === "RC") rc = ev;
       else if (ev.type === "PIN") pin = ev;
       else if (ev.type === "LINE_CLEARED") { rc = null; pin = null; }
     }
-    out.push((rc || pin) ? { rc, pin } : null);
+    out.push({ rc, pin });
   }
-  return out;
+  // Backward fill — race i borrows rc/pin from race i+1 if missing.
+  for (let i = out.length - 2; i >= 0; i--) {
+    if (!out[i].rc && out[i + 1].rc) out[i].rc = out[i + 1].rc;
+    if (!out[i].pin && out[i + 1].pin) out[i].pin = out[i + 1].pin;
+  }
+  return out.map((s) => (s.rc || s.pin) ? s : null);
 }
 
 // Binary-search slice of points where windowStart ≤ t ≤ windowEnd.
