@@ -431,9 +431,19 @@ function addTrack(name, points, meta = {}) {
   // Precompute the bounding box of the FULL race so fitAll() can frame it
   // even though the visible trail starts empty.
   const fullBounds = L.latLngBounds(latlngs);
+  // Cumulative ground distance (metres) along the track — used by the
+  // live legend ranking to score boats by how far they've sailed since
+  // the race start.
+  const cumDist = new Float64Array(points.length);
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const dLat = (b.lat - a.lat) * 111_320;
+    const dLon = (b.lon - a.lon) * 111_320 * Math.cos(a.lat * Math.PI / 180);
+    cumDist[i] = cumDist[i - 1] + Math.sqrt(dLat * dLat + dLon * dLon);
+  }
   const track = {
     id, name, layer, line, points, color, visible: true,
-    latlngs, fullBounds,
+    latlngs, fullBounds, cumDist,
     boat, maxSog,
     tStart: points[0].t, tEnd: points[points.length - 1].t,
     meta, // { race, boat, window } when set by selectDay
@@ -943,44 +953,111 @@ trackLegend.onAdd = function () {
 };
 trackLegend.addTo(map);
 
-// Compact label for a track: "R1 · Meltemi" (or just "Meltemi" if no race
-// context). Falls back to the verbose name property when meta is absent.
-function trackLegendLabel(t) {
-  const boat = t.meta?.boat;
-  const race = t.meta?.race?.name;
-  if (boat && race) return `${race} · ${boat}`;
-  if (boat) return boat;
-  return t.name;
+// Distance (metres) the boat has sailed between race-start and `t`.
+// Cheap binary search over the precomputed cumDist array.
+function boatProgressAt(track, t) {
+  if (!track.cumDist) return 0;
+  const pts = track.points;
+  if (t < pts[0].t) return 0;
+  const startSec = track.meta?.race ? Date.parse(track.meta.race.start) / 1000 : track.tStart;
+  const cumAt = (tt) => {
+    if (tt <= pts[0].t) return 0;
+    if (tt >= pts[pts.length - 1].t) return track.cumDist[pts.length - 1];
+    let lo = 0, hi = pts.length - 1;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid].t <= tt) lo = mid; else hi = mid;
+    }
+    return track.cumDist[lo];
+  };
+  return Math.max(0, cumAt(t) - cumAt(startSec));
 }
 
+// Live legend: ONE row per boat, ordered top-to-bottom by current
+// race progress (distance sailed since the active race's gun). Switches
+// to alphabetical when no race is being played. Clicking a row toggles
+// ALL of that boat's tracks (R1+R2+R3) at once.
+//
+// Throttled to ~3 Hz from the playback tick to avoid rebuilding DOM
+// every animation frame.
 function renderTrackLegend() {
   const div = trackLegend.getContainer();
   if (!div) return;
-  const live = tracks.filter((t) => !t.removed);
-  if (!live.length) { div.style.display = "none"; div.innerHTML = ""; return; }
+
+  // Group tracks by boat name.
+  const byBoat = new Map();
+  for (const t of tracks) {
+    if (t.removed) continue;
+    const boat = t.meta?.boat || t.name;
+    if (!byBoat.has(boat)) byBoat.set(boat, []);
+    byBoat.get(boat).push(t);
+  }
+  if (!byBoat.size) { div.style.display = "none"; div.innerHTML = ""; return; }
   div.style.display = "block";
-  div.innerHTML = live.map((t) => `
-    <div class="tl-row ${t.visible ? "" : "tl-hidden"}" data-id="${t.id}" title="Click to ${t.visible ? "hide" : "show"} on map">
-      <span class="tl-swatch" style="background:${t.color}"></span>
-      <span class="tl-name">${trackLegendLabel(t)}</span>
+
+  // Live ranking: which race is currently being played?
+  const activeRaceName = visibleRaceForMarks();
+  const isLive = activeRaceName != null && raceTime != null;
+
+  const rows = [];
+  for (const [boat, boatTracks] of byBoat) {
+    const color = boatTracks[0].color;
+    const visible = boatTracks.some((t) => t.visible);
+    let progress = 0;
+    if (isLive) {
+      const raceTrack = boatTracks.find(
+        (t) => t.meta?.race?.name === activeRaceName);
+      if (raceTrack) progress = boatProgressAt(raceTrack, raceTime);
+    }
+    rows.push({ boat, color, visible, progress, tracks: boatTracks });
+  }
+
+  // Order: live → most progress first; otherwise alphabetical by boat name.
+  if (isLive) rows.sort((a, b) => b.progress - a.progress);
+  else rows.sort((a, b) => a.boat.localeCompare(b.boat));
+
+  div.innerHTML = rows.map((r, i) => `
+    <div class="tl-row ${r.visible ? "" : "tl-hidden"}" data-boat="${r.boat}"
+         title="Click to ${r.visible ? "hide" : "show"} ${r.boat}">
+      ${isLive ? `<span class="tl-rank">${i + 1}</span>` : ""}
+      <span class="tl-swatch" style="background:${r.color}"></span>
+      <span class="tl-name">${r.boat}</span>
     </div>`).join("");
+
   for (const row of div.querySelectorAll(".tl-row")) {
     row.addEventListener("click", () => {
-      const tr = tracks[Number(row.dataset.id)];
-      if (!tr || tr.removed) return;
-      tr.visible = !tr.visible;
-      if (tr.visible) tr.layer.addTo(map); else map.removeLayer(tr.layer);
-      // Sync sidebar list state.
-      const li = tracksEl.querySelector(`li[data-id="${tr.id}"]`);
-      if (li) li.classList.toggle("hidden", !tr.visible);
-      row.classList.toggle("tl-hidden", !tr.visible);
-      row.title = `Click to ${tr.visible ? "hide" : "show"} on map`;
-      // If we just hid the selected track, clear selection panels.
-      if (selectedTrackId === tr.id && !tr.visible) selectTrack(null);
+      const boat = row.dataset.boat;
+      const trs = byBoat.get(boat);
+      if (!trs?.length) return;
+      const newVisible = !trs.some((t) => t.visible);
+      for (const tr of trs) {
+        if (tr.removed) continue;
+        tr.visible = newVisible;
+        if (newVisible) tr.layer.addTo(map); else map.removeLayer(tr.layer);
+        const li = tracksEl.querySelector(`li[data-id="${tr.id}"]`);
+        if (li) li.classList.toggle("hidden", !newVisible);
+      }
+      row.classList.toggle("tl-hidden", !newVisible);
+      // If the selected track belongs to this boat and just got hidden, drop it.
+      if (selectedTrackId != null
+          && trs.some((t) => t.id === selectedTrackId)
+          && !newVisible) {
+        selectTrack(null);
+      }
       updateRaceClockBounds();
       renderRaceMarksOnMap();
+      renderTrackLegend();
     });
   }
+}
+
+// Throttled renderer for use from the per-frame playback tick.
+let _lastLegendRender = 0;
+function tickTrackLegend() {
+  const now = performance.now();
+  if (now - _lastLegendRender < 350) return;
+  _lastLegendRender = now;
+  renderTrackLegend();
 }
 
 // ---------- Race-tab solo selector ----------
@@ -1600,26 +1677,32 @@ function computeRaceMarksForDay() {
   }
 }
 
-// Pick the SINGLE race whose marks should currently show:
-//   1. If the user has selected a race tab (R1/R2/R3) → that race.
-//   2. Else (All tab) → the race whose time window contains the playback
-//      clock — so as you scrub from R1 into R2 the marks switch over.
-//   3. Else nothing — marks stay hidden.
-// Means we never show R1 + R2 marks together: less map clutter, no
-// confusion about which mark belongs to which race.
+// Pick the SINGLE race whose marks should currently show.
+//
+//   1. The playback clock must be AFTER the race's actual gun — marks
+//      can't be reached before the start, so showing them during the
+//      pre-start window is misleading.
+//   2. The clock must be at or before the race end + 2 min grace.
+//   3. Among races meeting (1)+(2): if a race tab is selected (R1/R2/R3)
+//      and that race matches, use it; otherwise use the race the clock
+//      is in (handles the "All" tab case).
 function visibleRaceForMarks() {
-  if (activeRaceFilter) return activeRaceFilter;
   if (raceTime == null) return null;
+  let inRace = null;
+  const seen = new Set();
   for (const t of tracks) {
     if (t.removed || !t.meta?.race) continue;
     const r = t.meta.race;
+    if (seen.has(r.name)) continue;
+    seen.add(r.name);
     const startSec = Date.parse(r.start) / 1000;
     const endSec = r.end ? Date.parse(r.end) / 1000 : startSec + 3600;
-    if (raceTime >= startSec - 60 && raceTime <= endSec + 120) {
-      return r.name;
-    }
+    // Strictly post-gun: no marks during the start sequence.
+    if (raceTime < startSec || raceTime > endSec + 120) continue;
+    if (activeRaceFilter && r.name === activeRaceFilter) return r.name;
+    if (!activeRaceFilter && inRace == null) inRace = r.name;
   }
-  return null;
+  return inRace;
 }
 
 let lastRenderedMarksRace = null;
@@ -1884,6 +1967,7 @@ function updateBoatsToRaceTime(t) {
   tickGhosts();
   refreshStartCountdown();
   renderRaceMarksOnMap();
+  tickTrackLegend();
   syncUrlState();
 }
 

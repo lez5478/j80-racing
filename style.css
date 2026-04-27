@@ -398,6 +398,18 @@ body { display: flex; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .tl-row:hover { background: rgba(255, 255, 255, 0.08); }
+.tl-row .tl-rank {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex: 0 0 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 50%;
+  font-weight: 700; font-size: 10px; color: #facc15;
+  font-variant-numeric: tabular-nums;
+}
+.tl-row:first-child .tl-rank {
+  background: rgba(250, 204, 21, 0.25);
+  color: #fde047;
+}
 .tl-row .tl-swatch {
   width: 12px; height: 12px; flex: 0 0 12px;
   border-radius: 2px;
