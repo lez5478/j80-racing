@@ -2389,12 +2389,8 @@ function renderDayList() {
   const keys = [...days.keys()].filter(isRaceDay).sort().reverse();
   daysEl.innerHTML = `<option value="">— pick a race day (${keys.length}) —</option>` +
     keys.map((k) => {
-      const races = window.RACES[k];
-      const n = races.length;
-      const meltemiRaced = races.some((r) =>
-        r.finishers.some((f) => f.sail === MY_BOAT.sail));
-      const tag = meltemiRaced ? "" : " · no Meltemi";
-      return `<option value="${k}">${k} · ${n} race${n > 1 ? "s" : ""}${tag}</option>`;
+      const n = window.RACES[k].length;
+      return `<option value="${k}">${k} · ${n} race${n > 1 ? "s" : ""}</option>`;
     }).join("");
   daysEl.value = activeDayKey || "";
   if (keys.length) {
