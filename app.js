@@ -3631,16 +3631,12 @@ function clusterMarks(events, windDeg, radius = 120) {
       c.label = `M${clusters.indexOf(c) + 1}`;
     }
   }
-  // Consensus filter: a real mark must be supported by either
-  //   (a) ≥2 distinct boats rounding it (cross-boat agreement), or
-  //   (b) ≥2 roundings from the same boat (multi-lap evidence — most
-  //       races round the windward mark twice).
-  // This drops single-boat single-rounding events that are usually a
-  // misclassified gybe or tack rather than a real course mark.
-  const supported = clusters.filter((c) => {
-    const distinctBoats = new Set(c.rounded.map((idx) => events[idx].boat)).size;
-    return c.rounded.length >= 2 || distinctBoats >= 2;
-  });
+  // The detector itself already enforces strong evidence per rounding
+  // (smoothed TWA crosses 90°, state holds for ≥60 s, TWA reaches ≥50°
+  // away from 90°), so we don't need an extra consensus filter on top.
+  // Multi-boat / multi-lap data still helps centroid accuracy, but a
+  // single solid rounding is sufficient to display a mark.
+  const supported = clusters;
 
   // If two surviving clusters got the same W/L label, suffix them with a
   // counter (rare — happens when a course has two windward marks).
