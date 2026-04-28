@@ -2996,6 +2996,19 @@ async function selectDay(key) {
       startLinesForDay(slot.buttons, windows.map((w) => w.actualStart)),
     );
   }
+  // Race-level start line — the start line is a physical thing in the
+  // water, the same for every boat. So if ANY boat in this day pinged
+  // it, share that line with every other boat for the same race.
+  const sharedStartLines = windows.map((_, wi) => {
+    let rc = null, pin = null;
+    for (const lines of startLinesByBoat.values()) {
+      const sm = lines[wi];
+      if (sm?.rc && !rc) rc = sm.rc;
+      if (sm?.pin && !pin) pin = sm.pin;
+      if (rc && pin) break;
+    }
+    return (rc || pin) ? { rc, pin } : null;
+  });
   let added = 0;
   for (let wi = 0; wi < windows.length; wi++) {
     const w = windows[wi];
@@ -3008,7 +3021,9 @@ async function selectDay(key) {
         ? (myFin ? `P${myFin.place}` : (myDnx ? myDnx.status : "-"))
         : "";
       const name = `${w.race.name}${w.race.title ? " " + w.race.title : ""} · ${boat}${tag ? " (" + tag + ")" : ""}`;
-      const startMarks = startLinesByBoat.get(boat)[wi];
+      // Prefer this boat's own ping if it has one (most accurate for
+      // its skipper), else fall back to the shared race-level line.
+      const startMarks = startLinesByBoat.get(boat)[wi] || sharedStartLines[wi];
       addTrack(name, slice, { race: w.race, boat, window: w, startMarks });
       added++;
     }
