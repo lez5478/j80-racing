@@ -1318,19 +1318,50 @@ function coachReport(track, stats, race) {
   recordSeasonStat(track, stats, race);
 
   // ---- Start ----
+  // ONE consolidated observation: "X s late = ~Y m behind the leader".
+  // The two figures relate: lateness translated into a distance gap at
+  // J/80 target speed (~5 kn). Then a context clause about WHAT was
+  // happening at the gun (stalled / approaching at speed / far back).
   if (stats.startLine) {
     const sl = stats.startLine;
     if (sl.ocs) {
-      add("start", "bad", `OCS — crossed the line ${Math.abs(sl.lateBy).toFixed(1)}s before the gun.`);
+      add("start", "bad",
+        `OCS — crossed the line ${Math.abs(sl.lateBy).toFixed(1)}s before the gun.`);
     } else if (sl.lateBy != null) {
-      if (sl.lateBy < 3) add("start", "good", `On time at the gun (+${sl.lateBy.toFixed(1)}s).`);
-      else if (sl.lateBy < 10) add("start", "info", `Crossed +${sl.lateBy.toFixed(0)}s late — close enough.`);
-      else add("start", "warn", `Late by ${sl.lateBy.toFixed(0)}s at the gun.`);
+      const TARGET_KN = 5;            // J/80 close-hauled target speed
+      const KN_TO_MS = 0.5144;
+      // Distance you would have made AT TARGET SPEED in those late seconds
+      // — i.e. the gap to a perfectly-timed boat at full speed.
+      const distEquivM = sl.lateBy * TARGET_KN * KN_TO_MS;
+      let level, headline;
+      if (sl.lateBy < 3) {
+        level = "good"; headline = `On the line (+${sl.lateBy.toFixed(1)}s)`;
+      } else if (sl.lateBy < 10) {
+        level = "info";
+        headline = `${sl.lateBy.toFixed(0)}s late = about ${distEquivM.toFixed(0)} m behind the leader at the gun`;
+      } else if (sl.lateBy < 30) {
+        level = "warn";
+        headline = `${sl.lateBy.toFixed(0)}s late — about ${distEquivM.toFixed(0)} m to make up vs a perfect start`;
+      } else {
+        level = "bad";
+        headline = `Lost the start: ${sl.lateBy.toFixed(0)}s late ≈ ${distEquivM.toFixed(0)} m behind the fleet`;
+      }
+      // Context clause — what was going on at the gun?
+      let context = "";
+      const d = sl.distAtGun, s = sl.sogAtGun;
+      if (d != null && s != null) {
+        if (d < 20 && s < 2.5) {
+          context = ` At the gun: ${d.toFixed(0)} m from the line but stalled (${s.toFixed(1)} kn) — caught in irons / over-luffing.`;
+        } else if (d < 20 && s > 4) {
+          context = ` At the gun: ${d.toFixed(0)} m from the line at full speed (${s.toFixed(1)} kn) — clean final approach.`;
+        } else if (d > 80) {
+          context = ` At the gun you were ${d.toFixed(0)} m back at ${s.toFixed(1)} kn — late approach to the line.`;
+        } else {
+          context = ` At the gun: ${d.toFixed(0)} m from line, ${s.toFixed(1)} kn.`;
+        }
+      }
+      add("start", level, headline + "." + context);
     }
-    if (sl.distAtGun > 50) add("start", "warn", `${sl.distAtGun.toFixed(0)}m from the line at the gun — too far back.`);
-    else if (sl.distAtGun < 20) add("start", "good", `Right on the line at the gun (${sl.distAtGun.toFixed(0)}m).`);
-    if (sl.sogAtGun < 2.5) add("start", "warn", `Stalled approach: ${sl.sogAtGun.toFixed(1)} kn at the gun. Build speed earlier.`);
-    else if (sl.sogAtGun > 4.5) add("start", "good", `Hit the line with full speed (${sl.sogAtGun.toFixed(1)} kn).`);
   } else {
     add("start", "info", "No start line pinged — can't grade the start.");
   }
