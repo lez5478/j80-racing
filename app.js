@@ -1843,51 +1843,108 @@ function downloadBlob(filename, type, content) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100);
 }
 
-// Race report — opens a printable HTML window the user can save as PDF.
-function openRaceReport(track, stats) {
-  const race = track.meta?.race;
-  const me = race?.finishers.find((f) => f.sail === MY_BOAT.sail);
-  const mePlace = me ? `P${me.place}/${race.finishers.length + race.dnc.length}` : "—";
+// Daily coach report — printable HTML covering EVERY race of the day for
+// the selected boat. Each race section: header (place, finish), stats
+// grid, then the same coach-report observations the sidebar shows.
+function openRaceReport(track) {
+  const boatName = track.meta?.boat;
+  const dayKey = activeDayKey;
+  if (!boatName || !dayKey) return;
+  const dayRaces = (window.RACES?.[dayKey] || []);
+  // Find this boat's track for each race of the day.
+  const boatTracks = tracks.filter((t) =>
+    !t.removed && t.meta?.boat === boatName);
+  const sections = [];
+  for (const race of dayRaces) {
+    const t = boatTracks.find((bt) => bt.meta?.race?.name === race.name);
+    if (!t) continue; // boat didn't have a track for this race
+    const stats = analyzeRace(t, race, t.meta?.startMarks, windAtBoatFn);
+    const obs = coachReport(t, stats, race);
+    const me = race.finishers.find((f) =>
+      (window.BOAT_NAMES || {})[f.sail] === boatName);
+    const meDnx = race.dnc.find((d) =>
+      (window.BOAT_NAMES || {})[d.sail] === boatName);
+    const result = me ? `P${me.place} / ${race.finishers.length + race.dnc.length}`
+                     : meDnx ? meDnx.status : "—";
+    const sectionHtml = `
+      <div class="race-block">
+        <h2>${race.name} · ${race.title || ""}</h2>
+        <div class="meta">Start ${String(race.startH).padStart(2, "0")}:${String(race.startM).padStart(2, "0")} · Result <b>${result}</b>${me ? ` · Finish ${me.finish} · Elapsed ${me.elapsed}` : ""}</div>
+        <div class="grid">
+          <div><span>Tacks</span><b>${stats.tacks.length}</b></div>
+          <div><span>Gybes</span><b>${stats.gybes.length}</b></div>
+          <div><span>Marks</span><b>${stats.marks.length}</b></div>
+          <div><span>Max SOG</span><b>${t.maxSog.toFixed(1)} kn</b></div>
+          <div><span>Wind dir</span><b>${stats.avgWindDeg != null ? Math.round(stats.avgWindDeg) + "°" : "—"}</b></div>
+          <div><span>vs J/80 polar</span><b>${stats.avgPolarRatio != null ? (stats.avgPolarRatio * 100).toFixed(0) + "%" : "—"}</b></div>
+          ${stats.heelStats ? `<div><span>Heel (med/max)</span><b>${stats.heelStats.median.toFixed(0)}° / ${stats.heelStats.max.toFixed(0)}°</b></div>` : ""}
+          ${stats.startLine ? `
+          <div><span>Dist at gun</span><b>${stats.startLine.distAtGun.toFixed(0)} m</b></div>
+          <div><span>Crossed line</span><b>${stats.startLine.lateBy != null ? fmtSec(stats.startLine.lateBy) : "—"}${stats.startLine.ocs ? " (OCS)" : ""}</b></div>` : ""}
+        </div>
+        <div class="coach">
+          ${Object.keys(COACH_TITLES).map((k) => {
+            if (!obs[k] || !obs[k].length) return "";
+            const items = obs[k].map((o) =>
+              `<li class="cr-${o.level}">${o.text}</li>`).join("");
+            return `<div class="cr-sec"><div class="cr-sec-title">${COACH_TITLES[k]}</div><ul>${items}</ul></div>`;
+          }).join("")}
+        </div>
+      </div>`;
+    sections.push(sectionHtml);
+  }
+
+  if (!sections.length) {
+    alert(`No tracks for ${boatName} on ${dayKey} — load the day first.`);
+    return;
+  }
+
   const html = `<!doctype html><html><head><meta charset="utf-8">
-  <title>${track.name} — race report</title>
-  <style>
-    body { font-family: -apple-system, Segoe UI, sans-serif; margin: 32px; color: #111; }
-    h1 { margin: 0 0 4px 0; font-size: 22px; }
-    h2 { margin-top: 24px; font-size: 14px; text-transform: uppercase; color: #555; letter-spacing: 0.6px; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: left; font-variant-numeric: tabular-nums; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 8px; }
-    .grid > div { padding: 6px; background: #f3f4f6; border-radius: 4px; }
-    .grid b { display: block; font-size: 18px; }
-  </style></head><body>
-  <h1>${race?.title || track.name}</h1>
-  <div>${race?.date || ""} · start ${race ? String(race.startH).padStart(2,"0") + ":" + String(race.startM).padStart(2,"0") : ""} · ${mePlace}</div>
-  <h2>Race stats</h2>
-  <div class="grid">
-    <div><span>Tacks</span><b>${stats.tacks.length}</b></div>
-    <div><span>Gybes</span><b>${stats.gybes.length}</b></div>
-    <div><span>Marks rounded</span><b>${stats.marks.length}</b></div>
-    <div><span>Max SOG</span><b>${track.maxSog.toFixed(1)} kn</b></div>
-    <div><span>Avg wind dir</span><b>${stats.avgWindDeg != null ? Math.round(stats.avgWindDeg) + "°" : "—"}</b></div>
-    <div><span>vs J/80 polar</span><b>${stats.avgPolarRatio != null ? (stats.avgPolarRatio * 100).toFixed(0) + "%" : "—"}</b></div>
-    ${stats.startLine ? `
-    <div><span>Dist at gun</span><b>${stats.startLine.distAtGun.toFixed(0)} m</b></div>
-    <div><span>Crossed line</span><b>${stats.startLine.lateBy != null ? fmtSec(stats.startLine.lateBy) : "—"}${stats.startLine.ocs ? " (OCS)" : ""}</b></div>` : ""}
-  </div>
-  <h2>Scoreboard</h2>
-  <table><thead><tr><th>P</th><th>Boat</th><th>Sail</th><th>Finish</th><th>Elapsed</th></tr></thead><tbody>
-  ${(race?.finishers || []).map((f) => {
-    const name = (window.BOAT_NAMES || {})[f.sail] || "—";
-    const self = f.sail === MY_BOAT.sail ? "background:#fff7d6;" : "";
-    return `<tr style="${self}"><td>${f.place}</td><td>${name}</td><td>${f.sail}</td><td>${f.finish}</td><td>${f.elapsed}</td></tr>`;
-  }).join("")}
-  </tbody></table>
-  <p style="color:#888;font-size:11px;margin-top:24px;">Generated by J/80 Racing app · ${new Date().toLocaleString()}</p>
-  </body></html>`;
+<title>${boatName} — coach report ${dayKey}</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; margin: 28px; color: #111; }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  .day { color: #555; margin-bottom: 16px; font-size: 14px; }
+  h2 { margin: 0 0 4px; font-size: 16px; color: #1d4ed8; }
+  .race-block {
+    border-top: 2px solid #1d4ed8; padding: 12px 0;
+    page-break-inside: avoid;
+  }
+  .race-block:not(:first-of-type) { page-break-before: auto; }
+  .meta { color: #555; font-size: 12px; margin-bottom: 8px; font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 12px; }
+  .grid > div {
+    padding: 6px 8px; background: #f3f4f6; border-radius: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+  .grid span { display: block; font-size: 10px; color: #555;
+    text-transform: uppercase; letter-spacing: 0.4px; }
+  .grid b { display: block; font-size: 16px; }
+  .coach { font-size: 12px; }
+  .cr-sec { margin-bottom: 8px; }
+  .cr-sec-title { font-weight: 600; color: #444; margin-bottom: 2px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .coach ul { list-style: none; padding: 0; margin: 0; }
+  .coach li { padding: 2px 0 2px 16px; position: relative; line-height: 1.35; }
+  .coach li::before { position: absolute; left: 0; top: 2px; font-size: 10px; }
+  .cr-good::before { content: "✓"; color: #16a34a; }
+  .cr-info::before { content: "•"; color: #2563eb; }
+  .cr-warn::before { content: "!"; color: #ca8a04; font-weight: 700; }
+  .cr-bad::before  { content: "✗"; color: #dc2626; font-weight: 700; }
+  .cr-good { color: #166534; }
+  .cr-warn { color: #854d0e; }
+  .cr-bad  { color: #991b1b; }
+  .footer { color: #888; font-size: 10px; margin-top: 24px; }
+</style></head><body>
+<h1>${boatName} — coach report</h1>
+<div class="day">${dayKey} · ${sections.length} race${sections.length > 1 ? "s" : ""} of the day</div>
+${sections.join("")}
+<div class="footer">Generated by J/80 Racing app · ${new Date().toLocaleString()} ·
+  <span style="color:#aaa;">j80-racing.yafo78.workers.dev</span></div>
+</body></html>`;
   const w = window.open("", "_blank");
   w.document.write(html);
   w.document.close();
-  setTimeout(() => w.print(), 250);
+  setTimeout(() => w.print(), 350);
 }
 
 // ---------- Legs / Maneuvers / Polar / Gap ----------
@@ -2663,9 +2720,7 @@ document.getElementById("exportGpxBtn")?.addEventListener("click", () => {
 });
 document.getElementById("exportReportBtn")?.addEventListener("click", () => {
   if (selectedTrackId == null) return;
-  const t = tracks[selectedTrackId];
-  if (!_activeAnalysis || _activeAnalysis.trackId !== t.id) renderRaceStats(t);
-  openRaceReport(t, _activeAnalysis.stats);
+  openRaceReport(tracks[selectedTrackId]);
 });
 document.getElementById("copyLinkBtn")?.addEventListener("click", () => {
   syncUrlState();
