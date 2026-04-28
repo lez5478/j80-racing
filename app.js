@@ -1897,6 +1897,15 @@ function openRaceReport(track) {
       (window.BOAT_NAMES || {})[d.sail] === boatName);
     const result = me ? `P${me.place} / ${race.finishers.length + race.dnc.length}`
                      : meDnx ? meDnx.status : "—";
+    const polarInner = polarSvgInner(stats.polar);
+    const polarBlock = polarInner
+      ? `<div class="polar-block">
+           <div class="polar-title">Polar — your max SOG (green) vs J/80 target @ 12 kn TWS (yellow)</div>
+           <svg viewBox="-115 -115 230 230" width="240" height="240" style="display:block;margin:auto;background:#fafafa;border:1px solid #e5e7eb;border-radius:6px;">
+             ${polarInner}
+           </svg>
+         </div>`
+      : "";
     const sectionHtml = `
       <div class="race-block">
         <h2>${race.name} · ${race.title || ""}</h2>
@@ -1921,6 +1930,7 @@ function openRaceReport(track) {
             return `<div class="cr-sec"><div class="cr-sec-title">${COACH_TITLES[k]}</div><ul>${items}</ul></div>`;
           }).join("")}
         </div>
+        ${polarBlock}
       </div>`;
     sections.push(sectionHtml);
   }
@@ -1964,6 +1974,8 @@ function openRaceReport(track) {
   .cr-good { color: #166534; }
   .cr-warn { color: #854d0e; }
   .cr-bad  { color: #991b1b; }
+  .polar-block { margin-top: 12px; page-break-inside: avoid; }
+  .polar-title { font-size: 11px; color: #555; text-align: center; margin-bottom: 4px; }
   .footer { color: #888; font-size: 10px; margin-top: 24px; }
 </style></head><body>
 <h1>${boatName} — coach report</h1>
@@ -2038,15 +2050,15 @@ function renderManeuvers(stats) {
   }
 }
 
-function renderPolarPlot(polar) {
-  if (!polar) { polarPlotEl.hidden = true; return; }
+// Build the polar diagram as a standalone SVG content string. Used by
+// renderPolarPlot for the live sidebar AND by openRaceReport for the
+// printable PDF (so polars travel along with the report).
+function polarSvgInner(polar) {
+  if (!polar) return null;
   const angles = Object.keys(polar).map(Number).sort((a, b) => a - b);
   let totalCount = 0;
   for (const a of angles) totalCount += polar[a].port.count + polar[a].stbd.count;
-  if (totalCount < 30) { polarPlotEl.hidden = true; return; }
-  polarPlotEl.hidden = false;
-  // Plot: angle (radial) maps to y-axis (top = wind), radius = SOG.
-  // Max SOG to scale to viewport (radius 100).
+  if (totalCount < 30) return null;
   let maxSog = 0;
   for (const a of angles) {
     if (polar[a].port.maxSog > maxSog) maxSog = polar[a].port.maxSog;
@@ -2059,23 +2071,36 @@ function renderPolarPlot(polar) {
     const rad = (twa * Math.PI / 180) * sign;
     return [Math.sin(rad) * r(sog), -Math.cos(rad) * r(sog)];
   };
-  // Background rings
-  const rings = [2, 4, 6, 8].filter((s) => s <= maxSog).map((s) =>
-    `<circle cx="0" cy="0" r="${r(s)}" fill="none" stroke="#264168" stroke-width="0.5"/>`).join("");
-  // Wind axis (vertical)
+  // Concentric rings + a numeric label per ring (knots), and TWA tick
+  // labels around the perimeter so a reader can map any point to a
+  // (TWA, SOG) pair without guessing.
+  const ringValues = [2, 4, 6, 8, 10, 12].filter((s) => s <= maxSog);
+  const rings = ringValues.map((s) =>
+    `<circle cx="0" cy="0" r="${r(s)}" fill="none" stroke="#264168" stroke-width="0.5"/>` +
+    `<text x="2" y="${(-r(s) + 3).toFixed(1)}" fill="#94a3b8" font-size="6">${s}</text>`
+  ).join("");
+  // TWA tick labels: 30°, 60°, 90°, 120°, 150° both sides.
+  const twaLabels = [30, 60, 90, 120, 150].map((twa) => {
+    const stbdRad = twa * Math.PI / 180;
+    const portRad = -twa * Math.PI / 180;
+    const sX = Math.sin(stbdRad) * 108, sY = -Math.cos(stbdRad) * 108;
+    const pX = Math.sin(portRad) * 108, pY = -Math.cos(portRad) * 108;
+    return `<text x="${sX.toFixed(1)}" y="${sY.toFixed(1)}" fill="#94a3b8" font-size="6" text-anchor="middle" dominant-baseline="middle">${twa}°</text>` +
+           `<text x="${pX.toFixed(1)}" y="${pY.toFixed(1)}" fill="#94a3b8" font-size="6" text-anchor="middle" dominant-baseline="middle">${twa}°</text>`;
+  }).join("");
   const axes = `
     <line x1="0" y1="-105" x2="0" y2="105" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
     <line x1="-105" y1="0" x2="105" y2="0" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
-    <text x="0" y="-100" text-anchor="middle" fill="#8aa0b6" font-size="7">WIND</text>`;
-  // J/80 polar target curve at 12 kn TWS as reference
+    <text x="0" y="-101" text-anchor="middle" fill="#8aa0b6" font-size="7">WIND</text>
+    <text x="-100" y="-2" fill="#94a3b8" font-size="6">PORT</text>
+    <text x="80" y="-2" fill="#94a3b8" font-size="6">STBD</text>
+    ${twaLabels}`;
   const target = angles.map((a) => xy(a, polarSpeed(12, a), "stbd"))
     .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
   const targetMirror = angles.map((a) => xy(a, polarSpeed(12, a), "port"))
     .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
-  // Your max-SOG curve, both sides
   const yours = (side) => angles.map((a) => xy(a, polar[a][side].maxSog || 0, side))
     .map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join("");
-  // Dots: each TWA-bin's average SOG
   const dots = [];
   for (const a of angles) {
     for (const side of ["port", "stbd"]) {
@@ -2086,15 +2111,20 @@ function renderPolarPlot(polar) {
       dots.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${Math.min(5, 1.5 + Math.sqrt(b.count) / 4).toFixed(1)}" fill="#6ea8ff" opacity="0.7"/>`);
     }
   }
-  polarSvg.innerHTML = `
-    ${rings}${axes}
+  return `${rings}${axes}
     <path d="${target}" fill="none" stroke="#facc15" stroke-width="0.7" stroke-dasharray="3 2" opacity="0.7"/>
     <path d="${targetMirror}" fill="none" stroke="#facc15" stroke-width="0.7" stroke-dasharray="3 2" opacity="0.7"/>
     <path d="${yours("stbd")}" fill="none" stroke="#6fd06b" stroke-width="1.2" opacity="0.85"/>
     <path d="${yours("port")}" fill="none" stroke="#6fd06b" stroke-width="1.2" opacity="0.85"/>
-    ${dots.join("")}
-  `;
-  ppInfo.innerHTML = `<span style="color:#6fd06b;">●</span> your max SOG &nbsp; <span style="color:#facc15;">--</span> J/80 polar @ 12 kn TWS`;
+    ${dots.join("")}`;
+}
+
+function renderPolarPlot(polar) {
+  const inner = polarSvgInner(polar);
+  if (!inner) { polarPlotEl.hidden = true; return; }
+  polarPlotEl.hidden = false;
+  polarSvg.innerHTML = inner;
+  ppInfo.innerHTML = `<span style="color:#6fd06b;">●</span> your max SOG &nbsp; <span style="color:#facc15;">--</span> J/80 polar @ 12 kn TWS &nbsp; <span style="color:#94a3b8;">rings = kn</span>`;
 }
 
 // Gap chart vs another visible track in the SAME race window. Picks the
