@@ -341,20 +341,50 @@ function boatPopupHtml(track, sample) {
     </div>`;
 }
 
+// Sailboat icon viewed from above — hull oriented to the boat's COG, sail
+// rotated relative to the hull based on TWA so it always sits on the
+// leeward side. Two nested rotations:
+//   .boat-icon    rotates by COG (world frame)
+//   .boat-sail    rotates by sailAngle (boat frame, relative to centerline)
+//
+// Sail-angle convention (looking down on the deck, bow up):
+//   sailAngle > 0  → sail extending to the right (starboard side)
+//   sailAngle < 0  → sail extending to the left  (port side)
+//   wind from starboard → sail blown to PORT, sailAngle is NEGATIVE
+//   wind from port      → sail blown to STARBOARD, sailAngle is POSITIVE
 function boatIcon(color, heading) {
-  // SVG triangle pointing "up" — rotated by CSS to match heading (COG).
-  // Anchor centered so the boat sits right on the track.
   const html = `
     <div class="boat-icon" style="transform: rotate(${heading}deg);">
-      <svg viewBox="-12 -12 24 24">
-        <polygon class="hull"
-          points="0,-10 7,8 0,4 -7,8"
-          fill="${color}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/>
+      <svg viewBox="-12 -14 24 24">
+        <!-- Hull: pointed bow at top, wider stern at bottom -->
+        <path class="hull" d="M 0,-11 C 4,-6 4.5,3 3.5,7 L 0,8.5 L -3.5,7 C -4.5,3 -4,-6 0,-11 Z"
+          fill="${color}" stroke="#fff" stroke-width="1.1" stroke-linejoin="round"/>
+        <!-- Mast (small dot) -->
+        <circle cx="0" cy="-3" r="0.8" fill="#fff"/>
+        <!-- Sail (rotated each frame via SVG `transform` attribute, pivoting at the mast 0,-3). -->
+        <g class="boat-sail" transform="rotate(0 0 -3)">
+          <path d="M 0,-3 Q 1.4,3 0.4,9" fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.5" stroke-linecap="round"/>
+        </g>
       </svg>
     </div>`;
   return L.divIcon({
-    html, className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+    html, className: "", iconSize: [22, 22], iconAnchor: [11, 11],
   });
+}
+
+// Sail angle (degrees, signed) based on the boat's TWA. Magnitude grows
+// from close-hauled (~22°) up to dead run (~90°) at TWA 180. Sign is
+// chosen so the sail ends up on the leeward side.
+function sailAngleFromTwa(twa) {
+  if (twa == null || !isFinite(twa)) return null;
+  let t = twa;
+  while (t > 180) t -= 360; while (t < -180) t += 360;
+  const aTwa = Math.abs(t);
+  // Empirical fit for typical J/80 trim — tighter on the beat, eased
+  // progressively to roughly 90° dead downwind.
+  const ang = Math.max(20, Math.min(85, aTwa * 0.55));
+  // Wind from starboard (TWA > 0) means sail on PORT side (negative).
+  return t > 0 ? -ang : ang;
 }
 
 function addTrack(name, points, meta = {}) {
@@ -2583,11 +2613,26 @@ function updateBoatsToRaceTime(t) {
     const clamped = Math.max(tr.tStart, Math.min(tr.tEnd, t));
     const s = sampleAt(tr, clamped);
     tr.boat.setLatLng([s.lat, s.lon]);
-    // Update the rotation on the existing DOM node (avoids flicker from setIcon).
+    // Update rotations on the existing DOM nodes (avoids flicker from setIcon).
     const el = tr.boat.getElement();
     if (el) {
       const inner = el.querySelector(".boat-icon");
       if (inner) inner.style.transform = `rotate(${s.cog}deg)`;
+      // Sail orientation: wind from starboard → sail on port (negative).
+      const sail = el.querySelector(".boat-sail");
+      if (sail) {
+        const w = windAtBoatFn ? windAtBoatFn(s.t, s.lat, s.lon) : null;
+        let twa = null;
+        if (w && w.deg != null) {
+          // TWA in boat frame = wind FROM bearing - boat heading, signed.
+          twa = w.deg - s.cog;
+          while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+        }
+        const sa = sailAngleFromTwa(twa);
+        // SVG transform attribute rotates around the given pivot (mast at 0,-3),
+        // which is more reliably consistent across browsers than CSS for SVG groups.
+        sail.setAttribute("transform", `rotate(${sa != null ? sa : 0} 0 -3)`);
+      }
     } else {
       tr.boat.setIcon(boatIcon(tr.color, s.cog));
     }
