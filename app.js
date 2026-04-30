@@ -4427,10 +4427,71 @@ function makeBoatMesh(colorHex) {
   const sailMat = new THREE.MeshLambertMaterial({
     color: 0xfafafa, side: THREE.DoubleSide,
   });
-  sailGroup.add(new THREE.Mesh(sailGeom, sailMat));
+  const mainsailMesh = new THREE.Mesh(sailGeom, sailMat);
+  // Cache the resting vertex positions so the flapping animation can
+  // start from a known baseline each frame.
+  const baseSailPositions = new Float32Array(sailGeom.attributes.position.array);
+  mainsailMesh.userData.baseSailPositions = baseSailPositions;
+  sailGroup.add(mainsailMesh);
 
   group.add(sailGroup);
   group.userData.sailGroup = sailGroup;
+  group.userData.mainsailMesh = mainsailMesh;
+
+  // ---------- Spinnaker (visible only downwind, |TWA| > 90°) ----------
+  // Asymmetric J/80-style spinnaker: a curved triangular sail flying
+  // forward of the mast on the leeward side. Color = a lighter tint of
+  // the hull color so each boat has a recognisable kite.
+  const spinGroup = new THREE.Group();
+  spinGroup.position.set(0.4, HULL_DEPTH * 0.45 + 0.5, 0);
+  const spinShape = new THREE.Shape();
+  spinShape.moveTo(0, 0);                     // tack at deck (gooseneck)
+  spinShape.bezierCurveTo(2.0, 1.5, 3.0, 4.0, 1.5, 5.4); // curved leech
+  spinShape.lineTo(0, 5.4);                   // head at masthead
+  spinShape.lineTo(0, 0);                     // luff (along mast)
+  const spinGeom = new THREE.ShapeGeometry(spinShape);
+  // Bulge outward (negative Z = away from mast — boat's forward+windward)
+  const spinPos = spinGeom.attributes.position;
+  for (let i = 0; i < spinPos.count; i++) {
+    const x = spinPos.getX(i), y = spinPos.getY(i);
+    const bulge = -0.7 * Math.max(0, Math.sin(Math.PI * x / 3))
+                       * Math.max(0, Math.sin(Math.PI * y / 5.5));
+    spinPos.setZ(i, bulge);
+  }
+  spinPos.needsUpdate = true;
+  spinGeom.computeVertexNormals();
+  // Lighter tint of the hull color
+  const tint = new THREE.Color(colorHex).lerp(new THREE.Color(0xffffff), 0.55);
+  const spinMat = new THREE.MeshLambertMaterial({
+    color: tint, side: THREE.DoubleSide, transparent: true, opacity: 0.92,
+  });
+  spinGroup.add(new THREE.Mesh(spinGeom, spinMat));
+  spinGroup.visible = false;
+  group.add(spinGroup);
+  group.userData.spinGroup = spinGroup;
+  group.userData.spinBaseGeom = new Float32Array(spinPos.array);
+
+  // ---------- Wake spray (bow particles drifting backward) ----------
+  // 14 white blobs that move from the bow toward the stern in boat-local
+  // frame; they recycle when they pass the stern. Opacity & size scale
+  // with SOG so a stalled boat has no spray.
+  const wakeGroup = new THREE.Group();
+  const wakeCount = 14;
+  const wakeBaseMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, transparent: true, opacity: 0.55, depthWrite: false,
+  });
+  const wakeGeom = new THREE.SphereGeometry(0.22, 6, 6);
+  const wakeParts = [];
+  for (let i = 0; i < wakeCount; i++) {
+    const p = new THREE.Mesh(wakeGeom, wakeBaseMat.clone());
+    p.userData.life = i / wakeCount; // staggered phase
+    wakeGroup.add(p);
+    wakeParts.push(p);
+  }
+  group.add(wakeGroup);
+  group.userData.wakeParts = wakeParts;
+  group.userData.bowX = halfL;
+
   return group;
 }
 
@@ -4543,18 +4604,91 @@ function update3DBoats(t) {
     mesh.rotation.set(0, headingRad, 0);
     mesh.rotateX(heelDeg * Math.PI / 180);
 
-    // Sail trim — rotate sail group around its local Y. Positive sail
-    // angle = sail to starboard (matches 2D convention).
+    // Wind / TWA at the boat's position+time.
+    const w = windAtBoatFn ? windAtBoatFn(s.t, s.lat, s.lon) : null;
+    let twa = null;
+    if (w && w.deg != null) {
+      twa = w.deg - s.cog;
+      while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+    }
+    const sa = sailAngleFromTwa(twa);
+
+    // Mainsail trim — rotate around mast. Positive sail angle = sail
+    // to starboard (matches 2D convention).
     const sailGroup = mesh.userData.sailGroup;
     if (sailGroup) {
-      const w = windAtBoatFn ? windAtBoatFn(s.t, s.lat, s.lon) : null;
-      let twa = null;
-      if (w && w.deg != null) {
-        twa = w.deg - s.cog;
-        while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
-      }
-      const sa = sailAngleFromTwa(twa);
       sailGroup.rotation.y = sa != null ? sa * Math.PI / 180 : 0;
+    }
+
+    // -------- Spinnaker visibility + trim (downwind only) --------
+    const spinGroup = mesh.userData.spinGroup;
+    if (spinGroup) {
+      const downwind = twa != null && Math.abs(twa) > 95;
+      spinGroup.visible = downwind && s.sog > 1;
+      if (downwind) {
+        // Spinnaker projects forward of the mast on the leeward side —
+        // rotate so its body faces the wind. Use a fraction of sail
+        // angle (it sits more orthogonal than the main).
+        spinGroup.rotation.y = sa != null
+          ? Math.sign(sa) * Math.min(Math.abs(sa) * 1.1, 95) * Math.PI / 180
+          : 0;
+      }
+    }
+
+    // -------- Mainsail flapping (luffing) --------
+    // Sails luff when |TWA| < ~30° (boat in irons during a tack) or
+    // when SOG < 1 kn (no wind pressure on the sail). Apply a sinusoidal
+    // ripple to the cached vertex positions; amplitude scales with how
+    // luffy we are.
+    const mainsailMesh = mesh.userData.mainsailMesh;
+    if (mainsailMesh) {
+      const aTwa = twa != null ? Math.abs(twa) : 999;
+      const luffing = aTwa < 35 || s.sog < 1.2;
+      const luffStrength = aTwa < 25 ? 1
+                         : aTwa < 35 ? (35 - aTwa) / 10
+                         : s.sog < 1.2 ? 0.6
+                         : 0;
+      const flapAmp = 0.05 + 0.55 * luffStrength;
+      const phase = (s.t * (luffing ? 6 : 1.2)) % (Math.PI * 100);
+      const pos = mainsailMesh.geometry.attributes.position;
+      const base = mainsailMesh.userData.baseSailPositions;
+      for (let i = 0; i < pos.count; i++) {
+        const baseY = base[i * 3 + 1];
+        const baseZ = base[i * 3 + 2];
+        // Ripple grows toward the leech (away from mast) and toward the head.
+        const ripple = baseY > 0.3
+          ? flapAmp * Math.sin(phase + baseY * 0.9)
+          : 0;
+        pos.setZ(i, baseZ + ripple);
+      }
+      pos.needsUpdate = true;
+      mainsailMesh.geometry.computeVertexNormals();
+    }
+
+    // -------- Wake spray --------
+    // Each particle has a life ∈ [0,1]; it spawns at the bow and drifts
+    // toward the stern in boat-local frame, fading out. Spray density
+    // proportional to SOG (stalled boats produce nothing).
+    const wakeParts = mesh.userData.wakeParts;
+    const bowX = mesh.userData.bowX || 3.75;
+    if (wakeParts) {
+      const sogMps = s.sog * 0.5144;
+      const spawnRate = Math.min(0.06, 0.02 + sogMps * 0.012);
+      const opacityScale = Math.max(0, Math.min(1, (sogMps - 0.5) / 3));
+      for (const p of wakeParts) {
+        p.userData.life = (p.userData.life + spawnRate) % 1;
+        const life = p.userData.life;
+        // Position in boat-local: from +bowX (bow) trailing back to -hull length
+        p.position.x = bowX - life * 9;
+        // Spread sideways slightly as the wake widens behind
+        const spread = (Math.sin(life * 17 + (mesh.id || 0)) * 0.4) * (0.4 + life * 0.7);
+        p.position.z = spread;
+        p.position.y = 0.06 + 0.05 * Math.sin(life * 12);
+        // Scale + opacity falloff
+        p.scale.setScalar(0.4 + life * 1.4);
+        p.material.opacity = 0.55 * (1 - life) * opacityScale;
+        p.visible = opacityScale > 0.05;
+      }
     }
   }
 }
