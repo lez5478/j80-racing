@@ -361,7 +361,7 @@ function boatIcon(color, heading) {
           fill="${color}" stroke="#fff" stroke-width="1.1" stroke-linejoin="round"/>
         <!-- Mast (small dot) -->
         <circle cx="0" cy="-3" r="0.8" fill="#fff"/>
-        <!-- Sail (rotated each frame via SVG `transform` attribute, pivoting at the mast 0,-3). -->
+        <!-- Sail (rotated each frame via SVG transform attribute, pivoting at the mast 0,-3). -->
         <g class="boat-sail" transform="rotate(0 0 -3)">
           <path d="M 0,-3 Q 1.4,3 0.4,9" fill="none" stroke="rgba(255,255,255,0.92)" stroke-width="1.5" stroke-linecap="round"/>
         </g>
