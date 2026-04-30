@@ -4250,7 +4250,15 @@ function refresh3DScene() {
     if (t.removed || !t.visible) continue;
     const sId = `track-source-${t.id}`;
     const lId = `track-line-${t.id}`;
-    _mlMap.addSource(sId, { type: "geojson", data: trackToGeoJSON(t) });
+    // Start with just the first point — trail will grow during playback.
+    _mlMap.addSource(sId, {
+      type: "geojson",
+      data: {
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: [[t.latlngs[0][1], t.latlngs[0][0]]] },
+        properties: {},
+      },
+    });
     _mlMap.addLayer({
       id: lId, type: "line", source: sId,
       paint: {
@@ -4492,6 +4500,11 @@ function makeBoatMesh(colorHex) {
   group.userData.wakeParts = wakeParts;
   group.userData.bowX = halfL;
 
+  // Scale the whole boat 3× so the meshes are clearly visible against
+  // the satellite imagery. 7.5 m × 3 = ~22 m on screen — visually
+  // expressive without being absurd at typical race-zoom levels.
+  group.scale.setScalar(3);
+
   return group;
 }
 
@@ -4580,6 +4593,34 @@ function update3DBoats(t) {
     mesh.position.x = (s.lon - _3D_REF_LON) * 111_320 * cosRef;
     mesh.position.z = -(s.lat - _3D_REF_LAT) * 111_320;
     mesh.position.y = 0;
+
+    // Grow the 3D trail polyline up to the boat's current point. Same
+    // binary-search trick as the 2D version. Throttled implicitly by
+    // the playback tick rate; setData on a small GeoJSON is cheap.
+    if (_mlReady) {
+      const src = _mlMap.getSource(`track-source-${tr.id}`);
+      if (src) {
+        const pts = tr.points;
+        let lo = 0, hi = pts.length - 1;
+        while (lo + 1 < hi) {
+          const mid = (lo + hi) >> 1;
+          if (pts[mid].t <= clamped) lo = mid; else hi = mid;
+        }
+        // Only redraw if the head index moved (avoids per-frame churn).
+        const lastIdx = tr.userData_lastTrailIdx;
+        if (lastIdx !== lo) {
+          tr.userData_lastTrailIdx = lo;
+          const coords = new Array(lo + 2);
+          for (let i = 0; i <= lo; i++) coords[i] = [pts[i].lon, pts[i].lat];
+          coords[lo + 1] = [s.lon, s.lat]; // include interpolated tip
+          src.setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: coords },
+            properties: {},
+          });
+        }
+      }
+    }
 
     // Heading: bow at boat-local +X. To make bow point along COG (CW from
     // north), rotate around Y by (90° - COG).
