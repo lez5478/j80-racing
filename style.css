@@ -58,6 +58,50 @@ body { display: flex; }
 .hint { font-size: 12px; color: #8aa0b6; margin: 0 0 10px; }
 #map { flex: 1; height: 100vh; }
 
+/* MapLibre 3D mode — fills the same area as the 2D map. Only one is
+   visible at a time, controlled by body.is-3d. */
+#map3d {
+  flex: 1; height: 100vh;
+  background: #0f1924;
+}
+.map3d-hidden { display: none; }
+body.is-3d #map { display: none; }
+body.is-3d #map3d { display: block; }
+body:not(.is-3d) #map3d { display: none; }
+body.is-3d #map3d.map3d-hidden { display: block; }
+#toggle3d {
+  position: fixed; top: 14px; right: 14px;
+  z-index: 1100;
+  background: rgba(15, 25, 36, 0.92); color: #dbe7f3;
+  border: 1px solid #264168; border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px; font-weight: 700; letter-spacing: 0.6px;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+#toggle3d:hover { background: rgba(28, 49, 80, 0.92); }
+body.is-3d #toggle3d { background: rgba(110, 168, 255, 0.92); color: #0f1924; }
+@media (max-width: 768px), (pointer: coarse) {
+  #toggle3d { top: 10px; right: 10px; }
+}
+
+/* MapLibre boat marker (billboarded HTML element) */
+.m3d-boat {
+  width: 18px; height: 18px;
+  border-radius: 50%; border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+  cursor: pointer;
+}
+.m3d-mark {
+  width: 24px; height: 24px; border-radius: 50%;
+  background: #fef3c7; color: #0f1924;
+  border: 2px solid #f59e0b; font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: -apple-system, Segoe UI, sans-serif;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+
 #drop {
   border: 2px dashed #3b5470; border-radius: 8px; padding: 22px 10px;
   text-align: center; color: #8aa0b6; font-size: 13px; cursor: pointer;

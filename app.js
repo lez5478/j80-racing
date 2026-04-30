@@ -499,7 +499,7 @@ function addTrack(name, points, meta = {}) {
     li.classList.toggle("hidden", !track.visible);
     updateRaceClockBounds();
     renderTrackLegend();
-    renderRaceMarksOnMap(); renderFinishLineOnMap();
+    renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
   });
   li.querySelector("button").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -509,7 +509,7 @@ function addTrack(name, points, meta = {}) {
     if (selectedTrackId === id) selectTrack(null);
     updateRaceClockBounds();
     renderTrackLegend();
-    renderRaceMarksOnMap(); renderFinishLineOnMap();
+    renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
   });
   tracksEl.appendChild(li);
 
@@ -1055,7 +1055,7 @@ function renderTrackLegend() {
         selectTrack(null);
       }
       updateRaceClockBounds();
-      renderRaceMarksOnMap(); renderFinishLineOnMap();
+      renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
       renderTrackLegend();
     });
   }
@@ -1100,7 +1100,7 @@ function applyRaceFilter() {
     selectTrack(null);
   }
   renderTrackLegend();
-  renderRaceMarksOnMap(); renderFinishLineOnMap();
+  renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
 }
 
 function renderRaceTabs() {
@@ -2615,6 +2615,7 @@ function updateBoatsToRaceTime(t) {
   tickGhosts();
   refreshStartCountdown();
   renderRaceMarksOnMap(); renderFinishLineOnMap();
+  update3DBoats(raceTime);
   tickTrackLegend();
   syncUrlState();
 }
@@ -3150,7 +3151,7 @@ async function selectDay(key) {
   // Compute marks per race using ALL boats' tracks combined, then render
   // them on the map. Marks persist while their race is visible.
   computeRaceMarksForDay();
-  renderRaceMarksOnMap(); renderFinishLineOnMap();
+  renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
 
   // Default the scoreboard to the first race of the day so opening a day
   // immediately shows results alongside the track(s).
@@ -4110,6 +4111,208 @@ async function runDemo() {
 document.getElementById("demoBtn")?.addEventListener("click", () => {
   if (demoRunning) { demoRunning = false; hideDemoOverlay(); return; }
   runDemo();
+});
+
+// ---------- 3D MapLibre view ----------
+// Toggle that switches the map area between the existing 2D Leaflet view
+// and a 3D MapLibre view (tilted, rotatable, perspective-projected).
+// The 2D Leaflet map and all its existing logic stay untouched; the 3D
+// view mirrors the same data — tracks, marks, start/finish lines, boat
+// markers — and rides on the same race-time clock so playback works
+// identically.
+let _mlMap = null;
+let _mlReady = false;
+const _mlBoatMarkers = new Map();   // trackId -> maplibregl.Marker
+const _mlMarkMarkers = [];          // all course-mark markers
+const _mlLineMarkers = [];          // start/finish line geometry markers
+
+function init3DMap() {
+  if (_mlMap) return;
+  const c = map.getCenter();
+  const z = Math.max(11, map.getZoom() - 1);
+  _mlMap = new maplibregl.Map({
+    container: "map3d",
+    style: {
+      version: 8,
+      sources: {
+        osm: {
+          type: "raster",
+          tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+          tileSize: 256,
+          maxzoom: 19,
+          attribution: "© OpenStreetMap contributors",
+        },
+        seamarks: {
+          type: "raster",
+          tiles: ["https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png"],
+          tileSize: 256,
+          maxzoom: 18,
+        },
+      },
+      layers: [
+        { id: "osm", type: "raster", source: "osm" },
+        { id: "seamarks", type: "raster", source: "seamarks", paint: { "raster-opacity": 0.95 } },
+      ],
+    },
+    center: [c.lng, c.lat],
+    zoom: z,
+    pitch: 55,
+    bearing: 0,
+    maxPitch: 85,
+  });
+  _mlMap.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), "bottom-right");
+  _mlMap.on("load", () => {
+    _mlReady = true;
+    refresh3DScene();
+  });
+}
+
+function trackToGeoJSON(track) {
+  return {
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates: track.latlngs.map(([lat, lon]) => [lon, lat]),
+    },
+    properties: { color: track.color, id: track.id },
+  };
+}
+
+// Wipe and rebuild all dynamic layers (tracks, marks, lines, boats).
+function refresh3DScene() {
+  if (!_mlMap || !_mlReady) return;
+  // Track lines: remove existing then add per-visible-track.
+  const style = _mlMap.getStyle();
+  for (const layer of style.layers) {
+    if (layer.id.startsWith("track-line-")) _mlMap.removeLayer(layer.id);
+  }
+  for (const sourceId of Object.keys(style.sources)) {
+    if (sourceId.startsWith("track-source-")) _mlMap.removeSource(sourceId);
+  }
+  for (const t of tracks) {
+    if (t.removed || !t.visible) continue;
+    const sId = `track-source-${t.id}`;
+    const lId = `track-line-${t.id}`;
+    _mlMap.addSource(sId, { type: "geojson", data: trackToGeoJSON(t) });
+    _mlMap.addLayer({
+      id: lId, type: "line", source: sId,
+      paint: {
+        "line-color": t.color,
+        "line-width": 3,
+        "line-dasharray": [2, 2],
+        "line-opacity": 0.95,
+      },
+    });
+  }
+  // Boat markers
+  for (const [, m] of _mlBoatMarkers) m.remove();
+  _mlBoatMarkers.clear();
+  for (const t of tracks) {
+    if (t.removed || !t.visible) continue;
+    const el = document.createElement("div");
+    el.className = "m3d-boat";
+    el.style.background = t.color;
+    const m = new maplibregl.Marker({ element: el, anchor: "center" })
+      .setLngLat([t.latlngs[0][1], t.latlngs[0][0]])
+      .setPopup(new maplibregl.Popup({ offset: 14, closeButton: true }))
+      .addTo(_mlMap);
+    _mlBoatMarkers.set(t.id, m);
+  }
+  // Course marks (from the active race)
+  for (const m of _mlMarkMarkers) m.remove();
+  _mlMarkMarkers.length = 0;
+  const activeRaceName = visibleRaceForMarks();
+  if (activeRaceName) {
+    const marks = raceMarks.get(activeRaceName) || [];
+    for (const mk of marks) {
+      const el = document.createElement("div");
+      el.className = "m3d-mark";
+      el.textContent = mk.label;
+      const m = new maplibregl.Marker({ element: el, anchor: "center" })
+        .setLngLat([mk.lon, mk.lat])
+        .addTo(_mlMap);
+      _mlMarkMarkers.push(m);
+    }
+  }
+  // Start + finish lines
+  for (const m of _mlLineMarkers) m.remove();
+  _mlLineMarkers.length = 0;
+  for (const layer of _mlMap.getStyle().layers) {
+    if (layer.id === "start-line" || layer.id === "finish-line") _mlMap.removeLayer(layer.id);
+  }
+  for (const sourceId of Object.keys(_mlMap.getStyle().sources)) {
+    if (sourceId === "start-line-source" || sourceId === "finish-line-source") _mlMap.removeSource(sourceId);
+  }
+  // Build lines from any visible track in the active race that has marks pinged.
+  if (activeRaceName) {
+    const t = tracks.find((x) => !x.removed && x.visible && x.meta?.race?.name === activeRaceName);
+    const sm = t?.meta?.startMarks;
+    if (sm?.rc && sm?.pin) {
+      _mlMap.addSource("start-line-source", {
+        type: "geojson",
+        data: { type: "Feature", geometry: { type: "LineString",
+          coordinates: [[sm.rc.lon, sm.rc.lat], [sm.pin.lon, sm.pin.lat]] }, properties: {} },
+      });
+      _mlMap.addLayer({ id: "start-line", type: "line", source: "start-line-source",
+        paint: { "line-color": "#fff", "line-width": 2.5, "line-dasharray": [3, 2], "line-opacity": 0.9 } });
+    }
+    const fl = raceFinishLines.get(activeRaceName);
+    if (fl) {
+      _mlMap.addSource("finish-line-source", {
+        type: "geojson",
+        data: { type: "Feature", geometry: { type: "LineString",
+          coordinates: [[fl.rc.lon, fl.rc.lat], [fl.pin.lon, fl.pin.lat]] }, properties: {} },
+      });
+      _mlMap.addLayer({ id: "finish-line", type: "line", source: "finish-line-source",
+        paint: { "line-color": "#a78bfa", "line-width": 2.5, "line-dasharray": [4, 2], "line-opacity": 0.95 } });
+    }
+  }
+  // Initial fit
+  fit3DToTracks();
+  update3DBoats(raceTime);
+}
+
+function fit3DToTracks() {
+  if (!_mlMap) return;
+  const live = tracks.filter((t) => !t.removed && t.visible);
+  if (!live.length) return;
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  for (const t of live) {
+    for (const [lat, lon] of t.latlngs) {
+      if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon; if (lon > maxLon) maxLon = lon;
+    }
+  }
+  _mlMap.fitBounds([[minLon, minLat], [maxLon, maxLat]],
+    { padding: 60, pitch: 55, duration: 600 });
+}
+
+// Update boat marker positions for the current race time. Cheap: just
+// .setLngLat on existing markers, no source/layer rebuild.
+function update3DBoats(t) {
+  if (!_mlMap || !_mlReady || t == null) return;
+  for (const tr of tracks) {
+    if (tr.removed) continue;
+    const marker = _mlBoatMarkers.get(tr.id);
+    if (!marker) continue;
+    const clamped = Math.max(tr.tStart, Math.min(tr.tEnd, t));
+    const s = sampleAt(tr, clamped);
+    marker.setLngLat([s.lon, s.lat]);
+    // Spin the marker to match COG (CSS rotation on the wrapper element).
+    const el = marker.getElement();
+    if (el) el.style.transform = el.style.transform.replace(/ rotate\(.*?\)/, "") + ` rotate(${s.cog}deg)`;
+  }
+}
+
+const toggle3dBtn = document.getElementById("toggle3d");
+toggle3dBtn?.addEventListener("click", () => {
+  const on = !document.body.classList.contains("is-3d");
+  document.body.classList.toggle("is-3d", on);
+  toggle3dBtn.textContent = on ? "2D" : "3D";
+  if (on) {
+    init3DMap();
+    setTimeout(() => { _mlMap?.resize(); refresh3DScene(); }, 100);
+  }
 });
 
 // ---------- Mobile adjustments ----------

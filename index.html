@@ -5,6 +5,7 @@
 <title>J/80 / J/70 Racing app</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -136,6 +137,8 @@
   </div>
 </div>
 <div id="map"></div>
+<div id="map3d" class="map3d-hidden"></div>
+<button id="toggle3d" title="Toggle 3D view (Map / 3D)">3D</button>
 <div id="startCountdown" hidden></div>
 <div id="playbar" hidden>
   <button id="playBtn" class="pb-btn" title="Play / pause">▶</button>
@@ -152,6 +155,7 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="wind/lamma.js"></script>
 <script src="wind/timeseries.js"></script>
 <script src="wind/stations.js"></script>
