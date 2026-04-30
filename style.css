@@ -86,12 +86,18 @@ body.is-3d #toggle3d { background: rgba(110, 168, 255, 0.92); color: #0f1924; }
   #toggle3d { top: 10px; right: 10px; }
 }
 
-/* MapLibre boat marker (billboarded HTML element) */
-.m3d-boat {
-  width: 18px; height: 18px;
-  border-radius: 50%; border: 2px solid #fff;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.6);
+/* MapLibre boat marker — wraps the same sailboat SVG used in 2D, but
+   laid flat on the water surface via MapLibre's pitch/rotation
+   alignment. Slightly bigger than the 2D version because it's viewed
+   foreshortened on a tilted plane. */
+.m3d-boat-wrap {
+  width: 30px; height: 30px;
+  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.55));
   cursor: pointer;
+}
+.m3d-boat-wrap .m3d-svg {
+  width: 100%; height: 100%;
+  display: block;
 }
 .m3d-mark {
   width: 24px; height: 24px; border-radius: 50%;

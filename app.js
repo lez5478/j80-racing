@@ -4180,12 +4180,24 @@ function init3DMap() {
     style: {
       version: 8,
       sources: {
-        osm: {
+        // Esri World Imagery — free satellite tiles, no API key, looks
+        // dramatic at tilted angles.
+        sat: {
           type: "raster",
-          tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+          tiles: [
+            "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          ],
           tileSize: 256,
           maxzoom: 19,
-          attribution: "© OpenStreetMap contributors",
+          attribution: "Tiles © Esri — Source: Esri, Maxar, Earthstar Geographics",
+        },
+        // Optional faint OSM labels overlay so place names are readable
+        // over the satellite (dimmed via opacity).
+        labels: {
+          type: "raster",
+          tiles: ["https://stamen-tiles.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png"],
+          tileSize: 256,
+          maxzoom: 17,
         },
         seamarks: {
           type: "raster",
@@ -4195,8 +4207,8 @@ function init3DMap() {
         },
       },
       layers: [
-        { id: "osm", type: "raster", source: "osm" },
-        { id: "seamarks", type: "raster", source: "seamarks", paint: { "raster-opacity": 0.95 } },
+        { id: "sat", type: "raster", source: "sat" },
+        { id: "seamarks", type: "raster", source: "seamarks", paint: { "raster-opacity": 0.9 } },
       ],
     },
     center: [c.lng, c.lat],
@@ -4249,17 +4261,26 @@ function refresh3DScene() {
       },
     });
   }
-  // Boat markers
+  // Boat markers — same SVG sailboat icon used in 2D, but laid FLAT on
+  // the water plane (pitchAlignment: map) and rotated with the map
+  // (rotationAlignment: map) so they look like real boats sailing on a
+  // tilted sea when the camera is angled.
   for (const [, m] of _mlBoatMarkers) m.remove();
   _mlBoatMarkers.clear();
   for (const t of tracks) {
     if (t.removed || !t.visible) continue;
-    const el = document.createElement("div");
-    el.className = "m3d-boat";
-    el.style.background = t.color;
-    const m = new maplibregl.Marker({ element: el, anchor: "center" })
+    const wrap = document.createElement("div");
+    wrap.className = "m3d-boat-wrap";
+    // Reuse the boatIcon HTML — but we need a top-down sailboat that
+    // benefits from being laid flat by MapLibre.
+    wrap.innerHTML = sailboatSvg(t.color);
+    const m = new maplibregl.Marker({
+      element: wrap,
+      anchor: "center",
+      pitchAlignment: "map",       // tilt with the camera (lay flat on water)
+      rotationAlignment: "map",    // rotate with the map bearing
+    })
       .setLngLat([t.latlngs[0][1], t.latlngs[0][0]])
-      .setPopup(new maplibregl.Popup({ offset: 14, closeButton: true }))
       .addTo(_mlMap);
     _mlBoatMarkers.set(t.id, m);
   }
@@ -4332,8 +4353,22 @@ function fit3DToTracks() {
     { padding: 60, pitch: 55, duration: 600 });
 }
 
-// Update boat marker positions for the current race time. Cheap: just
-// .setLngLat on existing markers, no source/layer rebuild.
+// Same shape as the 2D boatIcon, exposed as a string for MapLibre HTML
+// markers. Hull pointed-bow up, mast at (0,-3), sail group rotates each
+// frame from update3DBoats based on TWA.
+function sailboatSvg(color) {
+  return `<svg viewBox="-12 -14 24 24" class="m3d-svg" overflow="visible">
+    <path class="hull" d="M 0,-11 C 4,-6 4.5,3 3.5,7 L 0,8.5 L -3.5,7 C -4.5,3 -4,-6 0,-11 Z"
+      fill="${color}" stroke="#fff" stroke-width="1.1" stroke-linejoin="round"/>
+    <circle cx="0" cy="-3" r="0.8" fill="#fff"/>
+    <g class="boat-sail" transform="rotate(0 0 -3)">
+      <path d="M 0,-3 Q 1.4,3 0.4,9" fill="none"
+        stroke="rgba(255,255,255,0.92)" stroke-width="1.5" stroke-linecap="round"/>
+    </g>
+  </svg>`;
+}
+
+// Update boat positions, headings, and sail trim each frame.
 function update3DBoats(t) {
   if (!_mlMap || !_mlReady || t == null) return;
   for (const tr of tracks) {
@@ -4343,9 +4378,26 @@ function update3DBoats(t) {
     const clamped = Math.max(tr.tStart, Math.min(tr.tEnd, t));
     const s = sampleAt(tr, clamped);
     marker.setLngLat([s.lon, s.lat]);
-    // Spin the marker to match COG (CSS rotation on the wrapper element).
+    // The marker's outer wrapper rotates with the map (pitchAlignment +
+    // rotationAlignment "map") — but COG-aligning the boat to its
+    // direction-of-travel is our job. Use the marker's setRotation() so
+    // the alignment math stays consistent with the tilt.
+    marker.setRotation(s.cog);
+    // Sail trim: same TWA computation as 2D.
     const el = marker.getElement();
-    if (el) el.style.transform = el.style.transform.replace(/ rotate\(.*?\)/, "") + ` rotate(${s.cog}deg)`;
+    if (el) {
+      const sail = el.querySelector(".boat-sail");
+      if (sail) {
+        const w = windAtBoatFn ? windAtBoatFn(s.t, s.lat, s.lon) : null;
+        let twa = null;
+        if (w && w.deg != null) {
+          twa = w.deg - s.cog;
+          while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+        }
+        const sa = sailAngleFromTwa(twa);
+        sail.setAttribute("transform", `rotate(${sa != null ? sa : 0} 0 -3)`);
+      }
+    }
   }
 }
 
