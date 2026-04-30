@@ -4261,29 +4261,11 @@ function refresh3DScene() {
       },
     });
   }
-  // Boat markers — same SVG sailboat icon used in 2D, but laid FLAT on
-  // the water plane (pitchAlignment: map) and rotated with the map
-  // (rotationAlignment: map) so they look like real boats sailing on a
-  // tilted sea when the camera is angled.
-  for (const [, m] of _mlBoatMarkers) m.remove();
-  _mlBoatMarkers.clear();
-  for (const t of tracks) {
-    if (t.removed || !t.visible) continue;
-    const wrap = document.createElement("div");
-    wrap.className = "m3d-boat-wrap";
-    // Reuse the boatIcon HTML — but we need a top-down sailboat that
-    // benefits from being laid flat by MapLibre.
-    wrap.innerHTML = sailboatSvg(t.color);
-    const m = new maplibregl.Marker({
-      element: wrap,
-      anchor: "center",
-      pitchAlignment: "map",       // tilt with the camera (lay flat on water)
-      rotationAlignment: "map",    // rotate with the map bearing
-    })
-      .setLngLat([t.latlngs[0][1], t.latlngs[0][0]])
-      .addTo(_mlMap);
-    _mlBoatMarkers.set(t.id, m);
-  }
+  // Boat meshes are rendered by the Three.js custom layer below — no
+  // HTML markers needed. Initialize the layer (idempotent) and rebuild
+  // its boat meshes for whatever tracks are visible.
+  init3DBoats();
+  refresh3DBoatMeshes();
   // Course marks (from the active race)
   for (const m of _mlMarkMarkers) m.remove();
   _mlMarkMarkers.length = 0;
@@ -4353,6 +4335,157 @@ function fit3DToTracks() {
     { padding: 60, pitch: 55, duration: 600 });
 }
 
+// ---------- Three.js procedural boat meshes ----------
+// Custom MapLibre layer that hosts a Three.js scene with one Group per
+// visible boat. Each Group contains:
+//   - hull   (extruded boat-shape, low-poly, coloured to the boat)
+//   - mast   (cylinder, vertical)
+//   - boom   (cylinder, horizontal at deck height)
+//   - sail   (triangular plane; rotates around the mast based on TWA)
+//
+// Each boat's world-space position is its (lat, lon) offset in metres
+// from a fixed reference point at the HK racing area; the layer's
+// `render()` ties the scene into the map's projection matrix. The
+// race-time clock drives position / heading / sail trim every frame.
+const _3D_REF_LAT = 22.21, _3D_REF_LON = 114.18;
+let _three = null; // { scene, camera, renderer, layer, boats: Map }
+
+function makeBoatMesh(colorHex) {
+  const HULL_LEN = 7.5, HULL_BEAM = 2.6, HULL_DEPTH = 0.9;
+  const halfL = HULL_LEN / 2, halfB = HULL_BEAM / 2;
+
+  const group = new THREE.Group();
+
+  // Hull — extruded shape, top-down boat outline. Bow at +X, stern at -X.
+  const hullShape = new THREE.Shape();
+  hullShape.moveTo(halfL, 0);
+  hullShape.bezierCurveTo(halfL * 0.7,  halfB,
+                          -halfL * 0.5, halfB * 0.95,
+                          -halfL * 0.95, halfB * 0.7);
+  hullShape.lineTo(-halfL,  halfB * 0.4);
+  hullShape.lineTo(-halfL, -halfB * 0.4);
+  hullShape.lineTo(-halfL * 0.95, -halfB * 0.7);
+  hullShape.bezierCurveTo(-halfL * 0.5, -halfB * 0.95,
+                          halfL * 0.7, -halfB,
+                          halfL, 0);
+  const hullGeom = new THREE.ExtrudeGeometry(hullShape, {
+    steps: 1, depth: HULL_DEPTH,
+    bevelEnabled: true, bevelThickness: 0.12, bevelSize: 0.18, bevelSegments: 2,
+  });
+  hullGeom.rotateX(-Math.PI / 2);          // lay flat (Y up)
+  hullGeom.translate(0, -HULL_DEPTH / 2, 0); // sit waterline at Y=0
+  const hullMat = new THREE.MeshLambertMaterial({ color: colorHex });
+  group.add(new THREE.Mesh(hullGeom, hullMat));
+
+  // White deck cap
+  const deckShape = hullShape.clone();
+  const deckGeom = new THREE.ShapeGeometry(deckShape);
+  deckGeom.rotateX(-Math.PI / 2);
+  deckGeom.translate(0, HULL_DEPTH * 0.45, 0);
+  const deckMat = new THREE.MeshLambertMaterial({ color: 0xeeeeee });
+  group.add(new THREE.Mesh(deckGeom, deckMat));
+
+  // Mast: vertical cylinder (J/80 ~6 m tall above deck)
+  const mastMat = new THREE.MeshLambertMaterial({ color: 0x555555 });
+  const mastGeom = new THREE.CylinderGeometry(0.07, 0.07, 6, 8);
+  const mast = new THREE.Mesh(mastGeom, mastMat);
+  mast.position.set(0.4, HULL_DEPTH * 0.45 + 3, 0);
+  group.add(mast);
+
+  // Sail group — pivots at the gooseneck (mast base on deck).
+  // Children: boom + triangular mainsail.
+  const sailGroup = new THREE.Group();
+  sailGroup.position.set(0.4, HULL_DEPTH * 0.45 + 0.5, 0);
+
+  // Boom (along local -X by default)
+  const boomGeom = new THREE.CylinderGeometry(0.05, 0.05, 3.2, 6);
+  boomGeom.rotateZ(Math.PI / 2);
+  const boom = new THREE.Mesh(boomGeom, mastMat);
+  boom.position.set(-1.5, 0, 0);
+  sailGroup.add(boom);
+
+  // Mainsail — triangle in the X-Y plane, attached at:
+  //   tack (0, 0)        = gooseneck (mast base + boom)
+  //   head (0, 5.5)      = top of mast
+  //   clew (-3.0, 0.15)  = boom end (stern direction in local frame)
+  const sailShape = new THREE.Shape();
+  sailShape.moveTo(0, 0);
+  sailShape.lineTo(0, 5.5);
+  sailShape.lineTo(-3, 0.15);
+  sailShape.lineTo(0, 0);
+  const sailGeom = new THREE.ShapeGeometry(sailShape);
+  // Slight billowing: bend the centre by displacing vertices a touch in -Z.
+  const pos = sailGeom.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i);
+    if (x < -0.1 && y > 0.3 && y < 5) {
+      pos.setZ(i, -0.25 * Math.sin(Math.PI * y / 5.5)); // gentle curve
+    }
+  }
+  pos.needsUpdate = true;
+  sailGeom.computeVertexNormals();
+  const sailMat = new THREE.MeshLambertMaterial({
+    color: 0xfafafa, side: THREE.DoubleSide,
+  });
+  sailGroup.add(new THREE.Mesh(sailGeom, sailMat));
+
+  group.add(sailGroup);
+  group.userData.sailGroup = sailGroup;
+  return group;
+}
+
+function init3DBoats() {
+  if (_three || typeof THREE === "undefined" || !_mlMap) return;
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+  sun.position.set(0.4, 1, 0.6).normalize();
+  scene.add(sun);
+  const camera = new THREE.Camera();
+
+  const layer = {
+    id: "three-boats",
+    type: "custom",
+    renderingMode: "3d",
+    onAdd(map, gl) {
+      _three.renderer = new THREE.WebGLRenderer({
+        canvas: map.getCanvas(), context: gl, antialias: true,
+      });
+      _three.renderer.autoClear = false;
+    },
+    render(gl, matrix) {
+      const ref = maplibregl.MercatorCoordinate.fromLngLat(
+        [_3D_REF_LON, _3D_REF_LAT], 0);
+      const scale = ref.meterInMercatorCoordinateUnits();
+      const m = new THREE.Matrix4().fromArray(matrix);
+      const l = new THREE.Matrix4()
+        .makeTranslation(ref.x, ref.y, ref.z)
+        .scale(new THREE.Vector3(scale, -scale, scale))
+        .multiply(new THREE.Matrix4().makeRotationX(Math.PI / 2));
+      camera.projectionMatrix = m.multiply(l);
+      _three.renderer.resetState();
+      _three.renderer.render(scene, camera);
+      _mlMap.triggerRepaint();
+    },
+  };
+  _three = { scene, camera, renderer: null, layer, boats: new Map() };
+  if (_mlReady) _mlMap.addLayer(layer);
+  else _mlMap.on("load", () => _mlMap.addLayer(layer));
+}
+
+function refresh3DBoatMeshes() {
+  if (!_three) return;
+  for (const [, mesh] of _three.boats) _three.scene.remove(mesh);
+  _three.boats.clear();
+  for (const t of tracks) {
+    if (t.removed || !t.visible) continue;
+    const colorHex = parseInt(t.color.replace("#", ""), 16);
+    const mesh = makeBoatMesh(colorHex);
+    _three.scene.add(mesh);
+    _three.boats.set(t.id, mesh);
+  }
+}
+
 // Same shape as the 2D boatIcon, exposed as a string for MapLibre HTML
 // markers. Hull pointed-bow up, mast at (0,-3), sail group rotates each
 // frame from update3DBoats based on TWA.
@@ -4368,35 +4501,60 @@ function sailboatSvg(color) {
   </svg>`;
 }
 
-// Update boat positions, headings, and sail trim each frame.
+// Update Three.js boats each frame: position (lat/lon → metres from ref),
+// heading (rotation around vertical axis = COG), sail trim (rotation
+// around mast = TWA-derived angle), heel (roll on bow-stern axis from
+// VTK quaternion / Vakaros heel column).
 function update3DBoats(t) {
-  if (!_mlMap || !_mlReady || t == null) return;
+  if (!_three || t == null) return;
+  const cosRef = Math.cos(_3D_REF_LAT * Math.PI / 180);
   for (const tr of tracks) {
     if (tr.removed) continue;
-    const marker = _mlBoatMarkers.get(tr.id);
-    if (!marker) continue;
+    const mesh = _three.boats.get(tr.id);
+    if (!mesh) continue;
     const clamped = Math.max(tr.tStart, Math.min(tr.tEnd, t));
     const s = sampleAt(tr, clamped);
-    marker.setLngLat([s.lon, s.lat]);
-    // The marker's outer wrapper rotates with the map (pitchAlignment +
-    // rotationAlignment "map") — but COG-aligning the boat to its
-    // direction-of-travel is our job. Use the marker's setRotation() so
-    // the alignment math stays consistent with the tilt.
-    marker.setRotation(s.cog);
-    // Sail trim: same TWA computation as 2D.
-    const el = marker.getElement();
-    if (el) {
-      const sail = el.querySelector(".boat-sail");
-      if (sail) {
-        const w = windAtBoatFn ? windAtBoatFn(s.t, s.lat, s.lon) : null;
-        let twa = null;
-        if (w && w.deg != null) {
-          twa = w.deg - s.cog;
-          while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
-        }
-        const sa = sailAngleFromTwa(twa);
-        sail.setAttribute("transform", `rotate(${sa != null ? sa : 0} 0 -3)`);
+
+    // Position relative to reference (X = east, Z = south, Y = sea level)
+    mesh.position.x = (s.lon - _3D_REF_LON) * 111_320 * cosRef;
+    mesh.position.z = -(s.lat - _3D_REF_LAT) * 111_320;
+    mesh.position.y = 0;
+
+    // Heading: bow at boat-local +X. To make bow point along COG (CW from
+    // north), rotate around Y by (90° - COG).
+    const headingRad = (90 - s.cog) * Math.PI / 180;
+
+    // Heel from Velocitek/Vakaros (degrees, port −, starboard +). Convert
+    // to a roll about the boat's local forward axis, then combine with
+    // heading in a quaternion.
+    let heelDeg = 0;
+    if (typeof s.heel === "number" && isFinite(s.heel)) {
+      heelDeg = Math.max(-50, Math.min(50, s.heel));
+    } else if (tr.points.length) {
+      // Interpolate heel between adjacent samples if available.
+      const i = tr.points.findIndex((p) => p.t >= clamped);
+      const a = tr.points[Math.max(0, i - 1)], b = tr.points[Math.max(0, i)];
+      if (a && b && typeof a.heel === "number" && typeof b.heel === "number") {
+        const f = b.t === a.t ? 0 : (clamped - a.t) / (b.t - a.t);
+        heelDeg = Math.max(-50, Math.min(50, a.heel + (b.heel - a.heel) * f));
       }
+    }
+    // Build orientation: yaw (heading) then roll about local +X (bow axis).
+    mesh.rotation.set(0, headingRad, 0);
+    mesh.rotateX(heelDeg * Math.PI / 180);
+
+    // Sail trim — rotate sail group around its local Y. Positive sail
+    // angle = sail to starboard (matches 2D convention).
+    const sailGroup = mesh.userData.sailGroup;
+    if (sailGroup) {
+      const w = windAtBoatFn ? windAtBoatFn(s.t, s.lat, s.lon) : null;
+      let twa = null;
+      if (w && w.deg != null) {
+        twa = w.deg - s.cog;
+        while (twa > 180) twa -= 360; while (twa < -180) twa += 360;
+      }
+      const sa = sailAngleFromTwa(twa);
+      sailGroup.rotation.y = sa != null ? sa * Math.PI / 180 : 0;
     }
   }
 }
