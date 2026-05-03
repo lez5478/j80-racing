@@ -247,6 +247,58 @@ export default {
                     ...summary });
     }
 
+    // ---------- GET /api/marks ----------
+    // Returns canonical per-day manually-placed course marks shared by all
+    // users. Shape: { <raceName>: [ { lat, lon, label }, … ] }.
+    // Empty object if no overrides have been saved for that day yet.
+    if (url.pathname === "/api/marks" && request.method === "GET") {
+      const date = (url.searchParams.get("date") || "").trim();
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      const blob = await env.SAIL_RECORDS.get(`marks/${date}.json`);
+      if (!blob) return json({});
+      return new Response(blob.body, {
+        headers: {
+          "content-type": "application/json",
+          "cache-control": "no-cache",
+          ...CORS_HEADERS,
+        },
+      });
+    }
+
+    // ---------- POST /api/marks ----------
+    // Body (JSON): { date, race, marks: [{lat,lon,label}, …] }
+    // Replaces the per-race entry in marks/<date>.json. Pass an empty
+    // array to clear that race's overrides (falls back to auto-detected).
+    if (url.pathname === "/api/marks" && request.method === "POST") {
+      let body;
+      try { body = await request.json(); }
+      catch { return json({ error: "JSON expected" }, { status: 400 }); }
+      const date = (body.date || "").trim();
+      const race = (body.race || "").trim();
+      const marks = Array.isArray(body.marks) ? body.marks : null;
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      if (!race || race.length > 64) return json({ error: "bad race" }, { status: 400 });
+      if (!marks || marks.length > 32) return json({ error: "bad marks" }, { status: 400 });
+      const clean = [];
+      for (const m of marks) {
+        const lat = Number(m.lat), lon = Number(m.lon);
+        const label = String(m.label || "").toUpperCase().slice(0, 4);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+        if (lat < -90 || lat > 90 || lon < -180 || lon > 180) continue;
+        if (!label) continue;
+        clean.push({ lat, lon, label });
+      }
+      const key = `marks/${date}.json`;
+      const existing = await env.SAIL_RECORDS.get(key);
+      const all = existing ? JSON.parse(await existing.text()) : {};
+      if (clean.length) all[race] = clean;
+      else delete all[race];
+      await env.SAIL_RECORDS.put(key, JSON.stringify(all), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      return json({ ok: true, date, race, count: clean.length });
+    }
+
     return env.ASSETS.fetch(request);
   },
 

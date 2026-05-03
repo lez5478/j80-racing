@@ -2234,6 +2234,8 @@ function manualMarksKey(raceName) {
 function loadManualMarksForDay(dateKey) {
   manualMarksByRace.clear();
   if (!dateKey || !window.RACES?.[dateKey]) return;
+  // Local cache first (instant, works offline). Server canonical override
+  // arrives async via fetchSharedMarksForDay → re-renders when it lands.
   for (const r of window.RACES[dateKey]) {
     try {
       const raw = localStorage.getItem(`sailing.manualMarks.${dateKey}.${r.name}`);
@@ -2243,12 +2245,45 @@ function loadManualMarksForDay(dateKey) {
       }
     } catch { /* corrupt entry */ }
   }
+  fetchSharedMarksForDay(dateKey);
+}
+async function fetchSharedMarksForDay(dateKey) {
+  try {
+    const r = await fetch(`/api/marks?date=${encodeURIComponent(dateKey)}`);
+    if (!r.ok) return;
+    const obj = await r.json();
+    if (dateKey !== activeDayKey) return; // user moved on
+    let changed = false;
+    for (const [raceName, arr] of Object.entries(obj || {})) {
+      if (!Array.isArray(arr) || !arr.length) continue;
+      manualMarksByRace.set(raceName, arr);
+      // Mirror to localStorage so reload-without-network still shows them.
+      try {
+        localStorage.setItem(
+          `sailing.manualMarks.${dateKey}.${raceName}`,
+          JSON.stringify(arr));
+      } catch { /* quota */ }
+      changed = true;
+    }
+    if (changed) {
+      renderRaceMarksOnMap(true);
+      if (typeof renderLaylinesOnMap === "function") renderLaylinesOnMap();
+      if (typeof refresh3DScene === "function") refresh3DScene();
+    }
+  } catch { /* offline — local cache already shown */ }
 }
 function saveManualMarks(raceName) {
   const arr = manualMarksByRace.get(raceName);
   const key = manualMarksKey(raceName);
   if (arr && arr.length) localStorage.setItem(key, JSON.stringify(arr));
   else localStorage.removeItem(key);
+  // Push to the shared canonical store. Empty array clears that race.
+  const dateKey = activeDayKey;
+  fetch("/api/marks", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ date: dateKey, race: raceName, marks: arr || [] }),
+  }).catch(() => { /* offline; local copy still works */ });
 }
 // What marks should be displayed for `raceName`? Manual marks win if any
 // exist; otherwise fall back to the auto-detected raceMarks.
