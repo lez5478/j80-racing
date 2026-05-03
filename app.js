@@ -383,8 +383,10 @@ function sailAngleFromTwa(twa) {
   // Empirical fit for typical J/80 trim — tighter on the beat, eased
   // progressively to roughly 90° dead downwind.
   const ang = Math.max(20, Math.min(85, aTwa * 0.55));
-  // Wind from starboard (TWA > 0) means sail on PORT side (negative).
-  return t > 0 ? -ang : ang;
+  // SVG rotate(positive) rotates clockwise (y-down), so a positive sail
+  // angle moves the boom to PORT (negative x). Wind from starboard
+  // (TWA > 0) → sail blown to PORT → return positive.
+  return t > 0 ? ang : -ang;
 }
 
 function addTrack(name, points, meta = {}) {
@@ -4891,11 +4893,12 @@ function update3DBoats(t) {
     }
     const sa = sailAngleFromTwa(twa);
 
-    // Mainsail trim — rotate around mast. Positive sail angle = sail
-    // to starboard (matches 2D convention).
+    // Mainsail trim — rotate around mast. Negate so the sail ends up on
+    // the leeward side in Three.js' right-handed coords (matches the 2D
+    // SVG convention where positive sailAngle puts the boom to PORT).
     const sailGroup = mesh.userData.sailGroup;
     if (sailGroup) {
-      sailGroup.rotation.y = sa != null ? sa * Math.PI / 180 : 0;
+      sailGroup.rotation.y = sa != null ? -sa * Math.PI / 180 : 0;
     }
 
     // -------- Spinnaker visibility + trim (downwind only) --------
@@ -4908,7 +4911,7 @@ function update3DBoats(t) {
         // rotate so its body faces the wind. Use a fraction of sail
         // angle (it sits more orthogonal than the main).
         spinGroup.rotation.y = sa != null
-          ? Math.sign(sa) * Math.min(Math.abs(sa) * 1.1, 95) * Math.PI / 180
+          ? -Math.sign(sa) * Math.min(Math.abs(sa) * 1.1, 95) * Math.PI / 180
           : 0;
       }
     }
