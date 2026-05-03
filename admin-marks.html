@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Marks · admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body { font: 14px -apple-system, system-ui, sans-serif; background: #0e1a2b; color: #dde7f3; margin: 0; padding: 16px 18px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  h2 { font-size: 14px; margin: 18px 0 6px; color: #8fb3df; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  input, button, select { font: inherit; padding: 6px 10px; border-radius: 5px; border: 1px solid #2a4263; background: #16263a; color: #dde7f3; }
+  input { min-width: 220px; }
+  button { cursor: pointer; background: #1c3653; }
+  button:hover { background: #264168; }
+  button.promote { background: #1f4d2e; border-color: #2a6c41; }
+  button.promote:hover { background: #2a6c41; }
+  button.clear { background: #4d1f1f; border-color: #6c2a2a; }
+  button.clear:hover { background: #6c2a2a; }
+  .race { background: #102236; border: 1px solid #1f3a5a; border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+  .race-name { font-weight: 600; color: #ffd166; }
+  .canonical { background: #0a1d12; border: 1px solid #1c4030; padding: 6px 8px; border-radius: 5px; margin: 6px 0; font-size: 12px; }
+  .rev { background: #142b46; border: 1px solid #213e60; padding: 6px 8px; border-radius: 5px; margin: 6px 0; font-size: 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .rev-meta { color: #8fb3df; font-size: 11px; }
+  .marks-list { font-family: ui-monospace, monospace; color: #c5d8ee; }
+  .empty { color: #6f8aa8; font-style: italic; }
+  #status { color: #ffd166; font-size: 12px; margin-left: 8px; }
+  a { color: #6ea8ff; }
+</style>
+</head>
+<body>
+<h1>Marks admin</h1>
+<p style="color:#8fb3df;font-size:12px;margin:-6px 0 12px;">Promote pending mark proposals to the shared canonical view. <a href="index.html">← back to app</a></p>
+
+<div class="row">
+  <input id="token" type="password" placeholder="X-Admin-Token" />
+  <button id="saveTok">Save token</button>
+  <span id="tokSt"></span>
+</div>
+<div class="row">
+  <input id="date" type="date" />
+  <button id="loadBtn">Load revisions</button>
+  <span id="status"></span>
+</div>
+
+<div id="out"></div>
+
+<script>
+const tokenEl = document.getElementById("token");
+const dateEl = document.getElementById("date");
+const out = document.getElementById("out");
+const status = document.getElementById("status");
+const tokSt = document.getElementById("tokSt");
+
+// Default date: most recent Sunday.
+function defaultDate() {
+  const d = new Date();
+  while (d.getDay() !== 0) d.setDate(d.getDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+dateEl.value = defaultDate();
+tokenEl.value = localStorage.getItem("sailing.adminToken") || "";
+if (tokenEl.value) tokSt.textContent = "loaded from localStorage";
+
+document.getElementById("saveTok").onclick = () => {
+  localStorage.setItem("sailing.adminToken", tokenEl.value.trim());
+  tokSt.textContent = "saved ✓";
+  setTimeout(() => (tokSt.textContent = ""), 1500);
+};
+
+function fmtTs(ms) {
+  const d = new Date(ms);
+  return d.toLocaleString();
+}
+function fmtMarks(marks) {
+  return marks.map((m) => `${m.label} @ ${m.lat.toFixed(5)}, ${m.lon.toFixed(5)}`).join(" · ");
+}
+
+async function api(path, opts = {}) {
+  const headers = { "X-Admin-Token": tokenEl.value.trim(), ...(opts.headers || {}) };
+  if (opts.body) headers["Content-Type"] = "application/json";
+  const r = await fetch(path, { ...opts, headers });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+async function load() {
+  const date = dateEl.value;
+  if (!date) { status.textContent = "pick a date"; return; }
+  status.textContent = "loading…";
+  out.innerHTML = "";
+  try {
+    const data = await api(`/api/marks-history?date=${encodeURIComponent(date)}`);
+    render(date, data);
+    status.textContent = "";
+  } catch (e) {
+    status.textContent = "error: " + e.message;
+  }
+}
+
+function render(date, data) {
+  const races = new Set([
+    ...Object.keys(data.canonical || {}),
+    ...Object.keys(data.revisions || {}),
+  ]);
+  if (!races.size) {
+    out.innerHTML = `<p class="empty">No canonical marks and no proposals for ${date}.</p>`;
+    return;
+  }
+  for (const race of [...races].sort()) {
+    const canon = data.canonical?.[race];
+    const revs = data.revisions?.[race] || [];
+    const div = document.createElement("div");
+    div.className = "race";
+    let html = `<div class="race-name">${race}</div>`;
+    html += `<div class="canonical"><b>Canonical (live for everyone):</b> `;
+    if (canon && canon.length) {
+      html += `<span class="marks-list">${fmtMarks(canon)}</span>`;
+      html += ` <button class="clear" data-act="clear" data-race="${race}">Clear</button>`;
+    } else {
+      html += `<span class="empty">none — auto-detected marks shown to users</span>`;
+    }
+    html += `</div>`;
+    if (!revs.length) {
+      html += `<div class="empty" style="font-size:12px;">No pending proposals.</div>`;
+    } else {
+      html += `<div style="font-size:11px;color:#8fb3df;margin-top:4px;">Proposals (newest first):</div>`;
+      for (const r of revs) {
+        const same = canon && JSON.stringify(canon) === JSON.stringify(r.marks);
+        html += `<div class="rev">
+          <div>
+            <div class="marks-list">${fmtMarks(r.marks)}</div>
+            <div class="rev-meta">${fmtTs(r.ts)} · ${r.ip || "?"}${same ? " · <b style='color:#7ad17a'>(== canonical)</b>" : ""}</div>
+          </div>
+          <button class="promote" data-act="promote" data-race="${race}" data-id="${r.id}">Promote</button>
+        </div>`;
+      }
+    }
+    div.innerHTML = html;
+    out.appendChild(div);
+  }
+  out.querySelectorAll("button[data-act='promote']").forEach((b) => {
+    b.onclick = () => promote(date, b.dataset.race, b.dataset.id);
+  });
+  out.querySelectorAll("button[data-act='clear']").forEach((b) => {
+    b.onclick = () => clearRace(date, b.dataset.race);
+  });
+}
+
+async function promote(date, race, id) {
+  if (!confirm(`Promote this revision as the canonical marks for ${race}?\n(Everyone will see it on next reload.)`)) return;
+  status.textContent = "promoting…";
+  try {
+    await api("/api/marks-promote", { method: "POST", body: JSON.stringify({ date, race, id }) });
+    status.textContent = "promoted ✓";
+    load();
+  } catch (e) { status.textContent = "error: " + e.message; }
+}
+async function clearRace(date, race) {
+  if (!confirm(`Clear canonical marks for ${race}? Auto-detected marks will be shown to users instead.`)) return;
+  status.textContent = "clearing…";
+  try {
+    await api("/api/marks-promote", { method: "POST", body: JSON.stringify({ date, race, clear: true }) });
+    status.textContent = "cleared ✓";
+    load();
+  } catch (e) { status.textContent = "error: " + e.message; }
+}
+
+document.getElementById("loadBtn").onclick = load;
+if (tokenEl.value) load();
+</script>
+</body>
+</html>
