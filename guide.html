@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>J/80 Racing app — user guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body {
+    font: 15px/1.55 -apple-system, system-ui, "Segoe UI", sans-serif;
+    background: #0e1a2b; color: #dde7f3;
+    margin: 0; padding: 24px 20px 80px;
+    max-width: 760px; margin-left: auto; margin-right: auto;
+  }
+  h1 { font-size: 24px; margin: 0 0 4px; color: #6ea8ff; }
+  h2 { font-size: 18px; margin: 28px 0 8px; color: #ffd166; border-bottom: 1px solid #1f3a5a; padding-bottom: 4px; }
+  h3 { font-size: 15px; margin: 16px 0 4px; color: #a3c7f0; }
+  p, li { color: #c5d8ee; }
+  ol, ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+  code, kbd {
+    background: #16263a; padding: 1px 5px; border-radius: 3px;
+    border: 1px solid #2a4263; font-family: ui-monospace, "Cascadia Code", monospace;
+    font-size: 13px; color: #fef3c7;
+  }
+  .lead { color: #8fb3df; font-style: italic; margin-bottom: 18px; }
+  .tip {
+    background: #102236; border-left: 3px solid #6ea8ff;
+    padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; font-size: 14px;
+  }
+  .warn {
+    background: #2b1e10; border-left: 3px solid #ffa94d;
+    padding: 8px 12px; margin: 10px 0; border-radius: 0 6px 6px 0; font-size: 14px;
+  }
+  a { color: #6ea8ff; }
+  hr { border: 0; border-top: 1px solid #1f3a5a; margin: 24px 0; }
+  .toc {
+    background: #102236; padding: 12px 18px; border-radius: 6px;
+    border: 1px solid #1f3a5a; margin: 14px 0 22px;
+  }
+  .toc ol { margin: 0; padding-left: 20px; }
+  .toc a { text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  .footer { color: #6f8aa8; font-size: 12px; margin-top: 40px; text-align: center; }
+</style>
+</head>
+<body>
+
+<h1>🛥️ J/80 / J/70 Racing — user guide</h1>
+<p class="lead">A web app to relive RHKYC J/80 races: every boat, every tack, the wind that day, and a coach-style report for your boat. No login. Works on a phone.</p>
+
+<div class="toc">
+  <b>Contents</b>
+  <ol>
+    <li><a href="#start">First time? Start here</a></li>
+    <li><a href="#picking">Picking a race day &amp; race</a></li>
+    <li><a href="#playing">Watching the replay</a></li>
+    <li><a href="#myboat">Marking your boat</a></li>
+    <li><a href="#analytics">Reading the analytics panels</a></li>
+    <li><a href="#wind">Wind data</a></li>
+    <li><a href="#3d">2D ↔ 3D view</a></li>
+    <li><a href="#marks">Marks &amp; laylines</a></li>
+    <li><a href="#upload">Uploading your own track</a></li>
+    <li><a href="#share">Sharing &amp; exporting</a></li>
+    <li><a href="#mobile">Tips on a phone</a></li>
+    <li><a href="#faq">FAQ &amp; troubleshooting</a></li>
+  </ol>
+</div>
+
+<h2 id="start">1. First time? Start here</h2>
+<ol>
+  <li>Open the app: <a href="index.html">J/80 Racing</a></li>
+  <li>In the left sidebar, pick a date under <b>Race day</b>. (Most recent races near the top.)</li>
+  <li>The map zooms to the course. Boats appear as little hulls. A play bar shows up at the bottom.</li>
+  <li>Click <b>▶</b> to start the replay. You'll see boats sail the actual race they did that day.</li>
+</ol>
+<div class="tip">If the sidebar is hidden (small screens), tap the <b>☰</b> button top-left.</div>
+
+<h2 id="picking">2. Picking a race day &amp; race</h2>
+<ul>
+  <li><b>Race day picker</b> (sidebar): select the date. Loads every boat that recorded a track that day.</li>
+  <li><b>Race tabs</b> (just below the day): if multiple races were sailed, tabs appear (R1, R2, R3…). Click one to filter the map to just that race.</li>
+  <li><b>"All"</b> tab shows every track from the day overlaid.</li>
+</ul>
+
+<h2 id="playing">3. Watching the replay</h2>
+<p>Bottom of the screen, the <b>play bar</b>:</p>
+<ul>
+  <li><b>▶ / ⏸</b> — play / pause</li>
+  <li><b>Slider</b> — drag to scrub through the race</li>
+  <li><b>1× → 100×</b> — playback speed (default 10×)</li>
+  <li><b>Time</b> — left side shows current race time, right side shows race end</li>
+</ul>
+<p>Each boat:</p>
+<ul>
+  <li>Shows a coloured hull, oriented to its course over ground (COG).</li>
+  <li>Trails a line behind it as the race progresses.</li>
+  <li>Has a small white sail rotated to the leeward side based on wind angle.</li>
+  <li>Click the boat to "select" it — its detailed analytics appear in the sidebar.</li>
+</ul>
+<div class="tip">Bottom-left corner of the map: a small <b>legend</b> ranks boats by how far they've sailed since the gun (live race progress). Click a boat name to select it.</div>
+
+<h2 id="myboat">4. Marking your boat</h2>
+<ol>
+  <li>Top of the sidebar, <b>My boat</b>: pick your name from the dropdown.</li>
+  <li>Stored in your browser. From now on, <b>your scoreboard line is highlighted</b>, and reports use your boat's results when you select your race.</li>
+</ol>
+
+<h2 id="analytics">5. Reading the analytics panels</h2>
+<p>Click any boat (on the map or in the legend) to surface a stack of panels in the sidebar:</p>
+
+<h3>Race scoreboard</h3>
+<p>The official RHKYC results for this race — finish times, elapsed, and DNFs. Your boat highlighted.</p>
+
+<h3>Wind shift over the race</h3>
+<p>A small chart of how the true wind direction shifted during the race. Useful for spotting persistent shifts you should have played.</p>
+
+<h3>Legs</h3>
+<p>Each leg of the course (start → mark 1 → mark 2 → finish):</p>
+<ul>
+  <li><b>Type</b> — Beat (upwind), Run (downwind), Reach</li>
+  <li><b>Dist / Time / SOG</b> — distance sailed, time, average speed</li>
+  <li><b>Tk/Gy</b> — tacks and gybes on that leg</li>
+</ul>
+
+<h3>Maneuvers</h3>
+<p>Every tack and gybe in the race, with how much speed was lost and how long it took to recover. <i>Pre-start maneuvers are excluded</i> — only what happened after the gun.</p>
+
+<h3>Polar (this race)</h3>
+<p>A radar plot of your speed at every wind angle, compared with a reference J/80 polar. Bumps outside the reference = you were sailing fast for the conditions.</p>
+
+<h3>Gap vs another boat</h3>
+<p>Click another boat in the legend after selecting yours — get a chart of how the gap (in seconds) opened/closed over the race.</p>
+
+<h3>Day coach report (PDF)</h3>
+<p>Click <b>Day coach report (PDF)</b> in the Race-stats panel. Generates a printable summary: start, wind, tactics, maneuvers, performance, fleet position, trends across your other races.</p>
+
+<h2 id="wind">6. Wind data</h2>
+<ul>
+  <li><b>Wind that day</b> (sidebar): the daily mean direction + speed from HKO Lamma station.</li>
+  <li><b>Live wind</b> chip: real-time-ish hourly snapshots from the HKO weather stations near Hong Kong harbour. Pick a station from the dropdown.</li>
+  <li><b>Wind arrow grid</b> (toggle): little arrows scattered across the map showing the wind at each station, interpolated for points in between.</li>
+  <li><b>Particle animation</b> (toggle): smoky particles drift across the water in the wind direction. Nicer to watch.</li>
+</ul>
+<div class="tip">The wind cron pulls a fresh snapshot every hour through Saturday/Sunday HKT, so during racing you see live wind on the map.</div>
+
+<h2 id="3d">7. 2D ↔ 3D view</h2>
+<p>Top-right corner: <b>3D</b> button. Toggles between:</p>
+<ul>
+  <li><b>2D</b> — top-down OpenSeaMap nautical chart.</li>
+  <li><b>3D</b> — satellite view tilted to a horizon, with proper boat hulls (mast, sail, spinnaker downwind, wake spray).</li>
+</ul>
+<p>Both views are driven by the same race clock — pause/play in either.</p>
+
+<h2 id="marks">8. Marks &amp; laylines</h2>
+<p>The app auto-detects course marks (windward, leeward, offset) from boat tracks and shows them as little orange circles. <b>Laylines</b> (dashed green = starboard, yellow = port) draw from the windward mark.</p>
+
+<h3>Auto-detection got a mark wrong?</h3>
+<ol>
+  <li>With a race tab selected, click <b>+ Place mark</b> at the top of the sidebar.</li>
+  <li>Click on the map where the correct mark was. Type a label: <code>W</code> windward, <code>L</code> leeward, <code>O</code> offset, <code>F</code> finish.</li>
+  <li>Repeat for each correct mark. <b>You must re-place every mark you want shown</b> — placing one manual mark hides all auto-detected ones for that race.</li>
+  <li>Click <b>+ Place mark</b> again to exit edit mode.</li>
+  <li>To delete a manual mark, click it on the map.</li>
+</ol>
+<div class="warn">
+Marks you place are saved <i>in your browser</i> and submitted as a <b>proposal</b>. Other users won't see them until an admin promotes the proposal. (See the admin tool: <a href="admin-marks.html">admin-marks.html</a>.)
+</div>
+
+<h2 id="upload">9. Uploading your own track</h2>
+<p>Have a Velocitek, Garmin watch, or Vakaros from a race? Add it to the fleet:</p>
+<ol>
+  <li>Open <a href="upload.html">upload.html</a> (link at the top of the sidebar).</li>
+  <li>Pick your boat name and race date.</li>
+  <li>Drop the file. Accepted formats:
+    <ul>
+      <li>Velocitek <b>.VTK</b></li>
+      <li>GPX (Garmin, Strava export)</li>
+      <li>TCX (Garmin)</li>
+      <li>FIT (Garmin/Wahoo)</li>
+      <li>Vakaros CSV</li>
+    </ul>
+  </li>
+  <li>Hit upload. Refresh the app — your boat shows up in the day's roster.</li>
+</ol>
+
+<h2 id="share">10. Sharing &amp; exporting</h2>
+<p>From the Race-stats panel (visible after selecting a boat):</p>
+<ul>
+  <li><b>Download GPX</b> — exports your selected boat's race as a standard GPX file.</li>
+  <li><b>Day coach report (PDF)</b> — printable race summary.</li>
+  <li><b>Copy share link</b> — link to the exact race day + race + boat + clock position. Send it; whoever opens it sees what you see.</li>
+</ul>
+
+<h2 id="mobile">11. Tips on a phone</h2>
+<ul>
+  <li>Tap <b>☰</b> top-left to open/close the sidebar.</li>
+  <li>Pinch to zoom the map; one-finger drag to pan.</li>
+  <li>The play bar is sticky at the bottom — won't get hidden as you scroll the sidebar.</li>
+  <li>3D view works on phones too but uses more battery — toggle back to 2D for long sessions.</li>
+</ul>
+
+<h2 id="faq">12. FAQ &amp; troubleshooting</h2>
+
+<h3>I picked a date but no boats appear</h3>
+<p>That date may have no uploaded tracks yet. Check the <b>Race day</b> picker — if the date is listed but the map is empty, nobody's uploaded a Velocitek/GPS file for it yet.</p>
+
+<h3>The race scoreboard is missing</h3>
+<p>RHKYC publishes results PDFs on Mondays after a race weekend. The app pulls and parses them automatically every Monday morning. If a weekend race is still missing on Tuesday, the PDF probably hasn't been posted.</p>
+
+<h3>Wind data is missing for an old date</h3>
+<p>HKO only keeps the last 24 hours of station data. The app archives every hour during race weekends. For older races we fall back to the daily Lamma chip when no hourly snapshots exist.</p>
+
+<h3>Marks are in the wrong place</h3>
+<p>See <a href="#marks">section 8</a> — you can place correct marks manually.</p>
+
+<h3>Sail is on the wrong side / boat looks wrong</h3>
+<p>Sails are auto-trimmed to the leeward side based on the wind angle that day. If wind data is missing or unreliable for that date, the sail may not match. The trim is cosmetic and doesn't affect any analytics.</p>
+
+<h3>How do I record demos / videos?</h3>
+<p>Click <b>🎬 Record demo</b> (top of the sidebar). Captures the next race playback to a downloadable video.</p>
+
+<hr>
+<p class="footer">
+Built for the RHKYC J/80 fleet. Tiles © OpenStreetMap, seamarks © OpenSeaMap, satellite © Esri.<br>
+Found a bug? Have a feature request? Tell us in the WhatsApp group.
+</p>
+
+</body>
+</html>
