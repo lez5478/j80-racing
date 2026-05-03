@@ -20,8 +20,16 @@ const MAX_BYTES = 30 * 1024 * 1024;
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
-  "access-control-allow-headers": "content-type",
+  "access-control-allow-headers": "content-type, x-admin-token",
 };
+
+// Admin endpoints check this header against the ADMIN_TOKEN secret.
+// Set the secret with: wrangler secret put ADMIN_TOKEN
+function checkAdmin(request, env) {
+  if (!env.ADMIN_TOKEN) return false;
+  const tok = request.headers.get("x-admin-token") || "";
+  return tok && tok === env.ADMIN_TOKEN;
+}
 
 function json(body, init = {}) {
   return new Response(JSON.stringify(body), {
@@ -265,10 +273,12 @@ export default {
       });
     }
 
-    // ---------- POST /api/marks ----------
-    // Body (JSON): { date, race, marks: [{lat,lon,label}, …] }
-    // Replaces the per-race entry in marks/<date>.json. Pass an empty
-    // array to clear that race's overrides (falls back to auto-detected).
+    // ---------- POST /api/marks (append-only revision) ----------
+    // Body (JSON): { date, race, marks: [{lat,lon,label}, …], ua? }
+    // Appends a new revision under marks-history/<date>/<race>/<ISO>-<rand>.json.
+    // Does NOT mutate the canonical marks/<date>.json — an admin must promote
+    // the revision (POST /api/marks-promote) for everyone to see it. The
+    // submitter still sees their proposed marks locally via localStorage.
     if (url.pathname === "/api/marks" && request.method === "POST") {
       let body;
       try { body = await request.json(); }
@@ -277,7 +287,9 @@ export default {
       const race = (body.race || "").trim();
       const marks = Array.isArray(body.marks) ? body.marks : null;
       if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
-      if (!race || race.length > 64) return json({ error: "bad race" }, { status: 400 });
+      if (!race || race.length > 64 || !/^[\w .'-]+$/.test(race)) {
+        return json({ error: "bad race" }, { status: 400 });
+      }
       if (!marks || marks.length > 32) return json({ error: "bad marks" }, { status: 400 });
       const clean = [];
       for (const m of marks) {
@@ -288,15 +300,88 @@ export default {
         if (!label) continue;
         clean.push({ lat, lon, label });
       }
-      const key = `marks/${date}.json`;
-      const existing = await env.SAIL_RECORDS.get(key);
-      const all = existing ? JSON.parse(await existing.text()) : {};
-      if (clean.length) all[race] = clean;
-      else delete all[race];
-      await env.SAIL_RECORDS.put(key, JSON.stringify(all), {
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      const rand = Math.random().toString(36).slice(2, 8);
+      // Race name may contain spaces — keep readable, just URL-encode.
+      const id = `${ts}-${rand}`;
+      const key = `marks-history/${date}/${encodeURIComponent(race)}/${id}.json`;
+      const payload = {
+        marks: clean,
+        ts: Date.now(),
+        ua: String(request.headers.get("user-agent") || "").slice(0, 200),
+        ip: request.headers.get("cf-connecting-ip") || null,
+      };
+      await env.SAIL_RECORDS.put(key, JSON.stringify(payload), {
         httpMetadata: { contentType: "application/json" },
       });
-      return json({ ok: true, date, race, count: clean.length });
+      return json({ ok: true, status: "submitted-for-review", date, race, id, count: clean.length });
+    }
+
+    // ---------- GET /api/marks-history?date=YYYY-MM-DD (admin) ----------
+    // Lists every proposed revision for that day, grouped by race.
+    if (url.pathname === "/api/marks-history" && request.method === "GET") {
+      if (!checkAdmin(request, env)) return json({ error: "unauthorized" }, { status: 401 });
+      const date = (url.searchParams.get("date") || "").trim();
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      const out = {};
+      let cursor;
+      do {
+        const list = await env.SAIL_RECORDS.list({
+          prefix: `marks-history/${date}/`, cursor, limit: 1000,
+        });
+        for (const obj of list.objects) {
+          const parts = obj.key.split("/"); // marks-history / <date> / <race> / <id>.json
+          if (parts.length !== 4) continue;
+          const race = decodeURIComponent(parts[2]);
+          const id = parts[3].replace(/\.json$/, "");
+          const blob = await env.SAIL_RECORDS.get(obj.key);
+          if (!blob) continue;
+          const payload = JSON.parse(await blob.text());
+          (out[race] = out[race] || []).push({ id, ...payload });
+        }
+        cursor = list.truncated ? list.cursor : null;
+      } while (cursor);
+      // Newest revision first per race.
+      for (const race of Object.keys(out)) out[race].sort((a, b) => b.ts - a.ts);
+      // Also include current canonical for context.
+      const canonBlob = await env.SAIL_RECORDS.get(`marks/${date}.json`);
+      const canonical = canonBlob ? JSON.parse(await canonBlob.text()) : {};
+      return json({ date, canonical, revisions: out });
+    }
+
+    // ---------- POST /api/marks-promote (admin) ----------
+    // Body: { date, race, id }      → promote revision <id> to canonical
+    //   or: { date, race, clear:true } → remove canonical entry for race
+    if (url.pathname === "/api/marks-promote" && request.method === "POST") {
+      if (!checkAdmin(request, env)) return json({ error: "unauthorized" }, { status: 401 });
+      let body;
+      try { body = await request.json(); }
+      catch { return json({ error: "JSON expected" }, { status: 400 }); }
+      const date = (body.date || "").trim();
+      const race = (body.race || "").trim();
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      if (!race) return json({ error: "bad race" }, { status: 400 });
+      const canonKey = `marks/${date}.json`;
+      const existing = await env.SAIL_RECORDS.get(canonKey);
+      const all = existing ? JSON.parse(await existing.text()) : {};
+      if (body.clear) {
+        delete all[race];
+      } else {
+        const id = (body.id || "").trim();
+        if (!id) return json({ error: "id required" }, { status: 400 });
+        const revKey = `marks-history/${date}/${encodeURIComponent(race)}/${id}.json`;
+        const revBlob = await env.SAIL_RECORDS.get(revKey);
+        if (!revBlob) return json({ error: "revision not found" }, { status: 404 });
+        const rev = JSON.parse(await revBlob.text());
+        if (!Array.isArray(rev.marks) || !rev.marks.length) {
+          return json({ error: "revision has no marks (use clear:true to remove)" }, { status: 400 });
+        }
+        all[race] = rev.marks;
+      }
+      await env.SAIL_RECORDS.put(canonKey, JSON.stringify(all), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      return json({ ok: true, date, race, canonical: all[race] || null });
     }
 
     return env.ASSETS.fetch(request);
