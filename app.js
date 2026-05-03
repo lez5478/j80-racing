@@ -2372,7 +2372,7 @@ function renderLaylinesOnMap() {
   laylinesLayer.clearLayers();
   const activeRaceName = visibleRaceForMarks();
   if (!activeRaceName) return;
-  const marks = raceMarks.get(activeRaceName) || [];
+  const marks = effectiveMarksFor(activeRaceName);
   const windDeg = raceWindByName.get(activeRaceName);
   if (windDeg == null) return;
   for (const m of marks) {
@@ -4474,7 +4474,7 @@ function refresh3DScene() {
   _mlMarkMarkers.length = 0;
   const activeRaceName = visibleRaceForMarks();
   if (activeRaceName) {
-    const marks = raceMarks.get(activeRaceName) || [];
+    const marks = effectiveMarksFor(activeRaceName);
     for (const mk of marks) {
       const el = document.createElement("div");
       el.className = "m3d-mark";
