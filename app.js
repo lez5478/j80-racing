@@ -529,7 +529,7 @@ function addTrack(name, points, meta = {}) {
     li.classList.toggle("hidden", !track.visible);
     updateRaceClockBounds();
     renderTrackLegend();
-    renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
+    renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
   });
   li.querySelector("button").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -539,7 +539,7 @@ function addTrack(name, points, meta = {}) {
     if (selectedTrackId === id) selectTrack(null);
     updateRaceClockBounds();
     renderTrackLegend();
-    renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
+    renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
   });
   tracksEl.appendChild(li);
 
@@ -1085,7 +1085,7 @@ function renderTrackLegend() {
         selectTrack(null);
       }
       updateRaceClockBounds();
-      renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
+      renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
       renderTrackLegend();
     });
   }
@@ -1130,7 +1130,7 @@ function applyRaceFilter() {
     selectTrack(null);
   }
   renderTrackLegend();
-  renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
+  renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
 }
 
 function renderRaceTabs() {
@@ -2218,6 +2218,8 @@ const raceMarks = new Map(); // race.name -> [{lat, lon, label, rounded[], n}]
 // pin end placed at the furthest crossing along that direction + small
 // buffer for visibility.
 const raceFinishLines = new Map(); // race.name -> { rc, pin, crossings: [{sail, place, lat, lon}] }
+// True-wind direction (degrees, FROM) per race — used by the layline renderer.
+const raceWindByName = new Map();
 
 // Helper: average true-wind direction across an arbitrary point series.
 function avgWindFor(track, race) {
@@ -2266,10 +2268,60 @@ function computeRaceMarksForDay() {
     }
     const marks = clusterMarks(allEvents, wind, 100);
     raceMarks.set(raceName, marks);
+    if (wind != null) raceWindByName.set(raceName, wind);
     // Also infer the finish line from boat crossings at their printed
     // finish times — uses the same anchored RC as the start line.
     const fl = computeFinishLineForRace(info.race, info.tracks);
     if (fl) raceFinishLines.set(raceName, fl);
+  }
+}
+
+// Layline geometry: from each windward mark, two close-hauled approach
+// lines on port and starboard tack. J/80 beats at ~42° off the wind.
+//   starboard layline FROM mark goes at bearing windDeg + 138°
+//     (a starboard-tack boat heading windDeg-42° to reach the mark)
+//   port layline FROM mark goes at bearing windDeg + 222° (= windDeg - 138°)
+function computeLaylinesForMark(mark, windDeg, beatAngleDeg = 42, lengthM = 1500) {
+  if (windDeg == null || mark == null) return null;
+  const stbdBearing = (windDeg + 180 - beatAngleDeg + 360) % 360;
+  const portBearing = (windDeg + 180 + beatAngleDeg + 360) % 360;
+  const dest = (lat, lon, bearing, distM) => {
+    const R = 6_371_000;
+    const br = bearing * Math.PI / 180;
+    const φ1 = lat * Math.PI / 180;
+    const λ1 = lon * Math.PI / 180;
+    const δ = distM / R;
+    const φ2 = Math.asin(Math.sin(φ1) * Math.cos(δ) + Math.cos(φ1) * Math.sin(δ) * Math.cos(br));
+    const λ2 = λ1 + Math.atan2(
+      Math.sin(br) * Math.sin(δ) * Math.cos(φ1),
+      Math.cos(δ) - Math.sin(φ1) * Math.sin(φ2),
+    );
+    return [φ2 * 180 / Math.PI, λ2 * 180 / Math.PI];
+  };
+  return {
+    stbd: { from: [mark.lat, mark.lon], to: dest(mark.lat, mark.lon, stbdBearing, lengthM) },
+    port: { from: [mark.lat, mark.lon], to: dest(mark.lat, mark.lon, portBearing, lengthM) },
+  };
+}
+
+const laylinesLayer = L.layerGroup().addTo(map);
+function renderLaylinesOnMap() {
+  laylinesLayer.clearLayers();
+  const activeRaceName = visibleRaceForMarks();
+  if (!activeRaceName) return;
+  const marks = raceMarks.get(activeRaceName) || [];
+  const windDeg = raceWindByName.get(activeRaceName);
+  if (windDeg == null) return;
+  for (const m of marks) {
+    if (!m.label || !m.label.startsWith("W")) continue; // only upwind marks
+    const ll = computeLaylinesForMark(m, windDeg);
+    if (!ll) continue;
+    L.polyline([ll.stbd.from, ll.stbd.to], {
+      color: "#22c55e", weight: 1.5, opacity: 0.55, dashArray: "5 5",
+    }).bindTooltip(`Starboard layline · ${m.label}`).addTo(laylinesLayer);
+    L.polyline([ll.port.from, ll.port.to], {
+      color: "#facc15", weight: 1.5, opacity: 0.55, dashArray: "5 5",
+    }).bindTooltip(`Port layline · ${m.label}`).addTo(laylinesLayer);
   }
 }
 
@@ -2659,7 +2711,7 @@ function updateBoatsToRaceTime(t) {
   renderWindGrid();
   tickGhosts();
   refreshStartCountdown();
-  renderRaceMarksOnMap(); renderFinishLineOnMap();
+  renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap();
   update3DBoats(raceTime);
   tickTrackLegend();
   syncUrlState();
@@ -3196,7 +3248,7 @@ async function selectDay(key) {
   // Compute marks per race using ALL boats' tracks combined, then render
   // them on the map. Marks persist while their race is visible.
   computeRaceMarksForDay();
-  renderRaceMarksOnMap(); renderFinishLineOnMap(); refresh3DScene();
+  renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
 
   // Default the scoreboard to the first race of the day so opening a day
   // immediately shows results alongside the track(s).
@@ -3915,8 +3967,10 @@ function clearTracks() {
   startCountdownEl.hidden = true;
   raceMarks.clear();
   raceFinishLines.clear();
+  raceWindByName.clear();
   markRoundingsLayer.clearLayers();
   raceFinishLineLayer.clearLayers();
+  laylinesLayer.clearLayers();
   lastRenderedMarksRace = null;
   lastRenderedFinishRace = null;
   renderTrackLegend();
