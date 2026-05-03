@@ -2274,6 +2274,27 @@ function computeRaceMarksForDay() {
     const fl = computeFinishLineForRace(info.race, info.tracks);
     if (fl) raceFinishLines.set(raceName, fl);
   }
+  // Domain rule: in most RHKYC J/80 races the downwind mark IS the finish
+  // pin (the line runs from the committee boat to that mark; sometimes a
+  // GATE in class-champs format). The detector spots that crossing as a
+  // downwind→upwind transition and labels it "L", but the finish line
+  // already conveys the same information. Suppress L marks within 80 m
+  // of either finish-line end to keep the map clean.
+  for (const [raceName, marks] of raceMarks) {
+    const fl = raceFinishLines.get(raceName);
+    if (!fl) continue;
+    const distM = (a, b) => {
+      const dLat = (a.lat - b.lat) * 111_320;
+      const dLon = (a.lon - b.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+      return Math.sqrt(dLat * dLat + dLon * dLon);
+    };
+    const kept = marks.filter((m) => {
+      if (!m.label || !m.label.startsWith("L")) return true;
+      const near = Math.min(distM(m, fl.rc), distM(m, fl.pin));
+      return near > 80;
+    });
+    raceMarks.set(raceName, kept);
+  }
 }
 
 // Layline geometry: from each windward mark, two close-hauled approach
