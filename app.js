@@ -2550,7 +2550,7 @@ function renderRaceMarksOnMap(force) {
     const marker = L.marker([m.lat, m.lon], {
       icon: L.divIcon({
         html: `<div class="${cls}">${m.label}</div>`,
-        className: "", iconSize: [26, 26], iconAnchor: [13, 13],
+        className: "", iconSize: [13, 13], iconAnchor: [7, 7],
       }),
       interactive: true, zIndexOffset: 300,
     }).bindTooltip(tip).addTo(markRoundingsLayer);
