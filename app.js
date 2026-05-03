@@ -4013,7 +4013,14 @@ function analyzeRace(track, race, startMarks, windAtBoatFn) {
     avgWindDeg = window.WIND_DAILY[race.date].dir;
   }
 
-  const { tacks, gybes } = detectTacksGybes(pts, avgWindDeg);
+  let { tacks, gybes } = detectTacksGybes(pts, avgWindDeg);
+  // Pre-start maneuvers are mostly boats holding position behind the line —
+  // they're not tactical decisions and just inflate the count. Keep only
+  // maneuvers after the gun (with a small grace second to absorb clock skew).
+  if (startSec != null) {
+    tacks = tacks.filter((m) => m.t >= startSec - 1);
+    gybes = gybes.filter((m) => m.t >= startSec - 1);
+  }
   const raceEndSec = race?.end ? Date.parse(race.end) / 1000 : null;
   const markEvents = detectMarkRoundings(pts, startSec, raceEndSec, avgWindDeg, race?.title);
   const marks = clusterMarks(markEvents, avgWindDeg);
