@@ -2974,17 +2974,40 @@ document.getElementById("copyLinkBtn")?.addEventListener("click", () => {
 // for the currently visible race. Manual marks override auto-detected ones
 // and persist via localStorage. Click an existing manual mark to delete it.
 const editMarksBtn = document.getElementById("editMarksBtn");
-function setMarkEditMode(on) {
-  manualMarkEditMode = !!on;
-  if (editMarksBtn) {
-    editMarksBtn.classList.toggle("active", manualMarkEditMode);
-    editMarksBtn.textContent = manualMarkEditMode
+
+// Always-visible "+ Place mark" button at the top of the sidebar (appears
+// whenever a race day is loaded). Mirrors the one in the Race-stats panel
+// so the user doesn't have to select a boat first.
+const editMarksBtnTop = document.createElement("button");
+editMarksBtnTop.id = "editMarksBtnTop";
+editMarksBtnTop.className = "rs-btn";
+editMarksBtnTop.type = "button";
+editMarksBtnTop.textContent = "+ Place mark";
+editMarksBtnTop.style.cssText =
+  "display:none;width:100%;margin:6px 0 4px;padding:8px;font-size:12px;";
+// Insert just above the race tabs (which sit near the top of the sidebar).
+raceTabsEl.parentNode.insertBefore(editMarksBtnTop, raceTabsEl);
+
+function syncMarkEditButtons() {
+  for (const btn of [editMarksBtn, editMarksBtnTop]) {
+    if (!btn) continue;
+    btn.classList.toggle("active", manualMarkEditMode);
+    btn.textContent = manualMarkEditMode
       ? "Click map to place — done"
       : "+ Place mark";
   }
+}
+function setMarkEditMode(on) {
+  manualMarkEditMode = !!on;
+  syncMarkEditButtons();
   document.body.classList.toggle("mark-edit-mode", manualMarkEditMode);
 }
+function showTopMarkBtnIfDayLoaded() {
+  const has = !!activeDayKey && (window.RACES?.[activeDayKey]?.length > 0);
+  editMarksBtnTop.style.display = has ? "block" : "none";
+}
 editMarksBtn?.addEventListener("click", () => setMarkEditMode(!manualMarkEditMode));
+editMarksBtnTop.addEventListener("click", () => setMarkEditMode(!manualMarkEditMode));
 map.on("click", (e) => {
   if (!manualMarkEditMode) return;
   const activeRaceName = visibleRaceForMarks() || activeRaceFilter ||
@@ -3284,6 +3307,7 @@ async function selectDay(key) {
   // marks before tracks render so renderRaceMarksOnMap sees them.
   setMarkEditMode(false);
   loadManualMarksForDay(key);
+  showTopMarkBtnIfDayLoaded();
   renderDayList();
   renderWindForDay(key);
   renderWindBarb(key);
