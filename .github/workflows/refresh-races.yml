@@ -1,0 +1,57 @@
+# Pulls fresh J/80 race-result PDFs from RHKYC every Monday morning HKT,
+# regenerates race-results/races.js, and commits any changes back to main.
+# Cloudflare Pages auto-redeploys on push, so the new race day shows up in
+# the app a few minutes later. Trigger by hand any time via "Run workflow".
+
+name: Refresh races
+
+on:
+  schedule:
+    # 00:00 UTC every Monday = 08:00 HKT Monday.
+    - cron: "0 0 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-races
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need write access to push the regenerated races.js back.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci || npm install
+
+      - name: Fetch RHKYC PDFs
+        run: node race-results/fetch.js
+
+      - name: Parse PDFs → races.js
+        run: node race-results/parse.js
+
+      - name: Commit & push if anything changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add race-results/2025-2026 race-results/2024-2025 race-results/2023-2024 race-results/races.js 2>/dev/null || true
+          # Add every season folder that exists, just in case.
+          git add race-results/ 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No changes — RHKYC has no new PDFs this week."
+          else
+            git commit -m "Auto-refresh races from RHKYC ($(date -u +%Y-%m-%d))"
+            git push
+          fi
