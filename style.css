@@ -396,6 +396,19 @@ body.is-3d #toggle3d { background: rgba(110, 168, 255, 0.92); color: #0f1924; }
   margin-right: 4px; margin-top: 4px;
 }
 .rs-btn:hover { background: #274363; }
+.rs-btn.active {
+  background: #facc15; color: #0f1924; border-color: #facc15;
+  font-weight: 700;
+}
+body.mark-edit-mode #map { cursor: crosshair !important; }
+body.mark-edit-mode .leaflet-container,
+body.mark-edit-mode .leaflet-interactive { cursor: crosshair !important; }
+.mark-icon.manual {
+  background: #fef3c7;
+  border-color: #d97706;
+  box-shadow: 0 0 0 2px rgba(217, 119, 6, 0.3), 0 1px 3px rgba(0,0,0,0.4);
+  cursor: pointer;
+}
 
 /* Mark-rounding markers */
 .mark-icon {

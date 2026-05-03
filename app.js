@@ -2221,6 +2221,48 @@ const raceFinishLines = new Map(); // race.name -> { rc, pin, crossings: [{sail,
 // True-wind direction (degrees, FROM) per race — used by the layline renderer.
 const raceWindByName = new Map();
 
+// Manually-placed marks per race (date.race → [{lat, lon, label}]).
+// Stored in localStorage so they persist across sessions. When a race
+// has any manual marks, they OVERRIDE the auto-detected ones for the
+// map render. Edit mode is toggled by the sidebar "+ Place mark" button.
+const manualMarksByRace = new Map();
+let manualMarkEditMode = false;
+
+function manualMarksKey(raceName) {
+  return `sailing.manualMarks.${activeDayKey}.${raceName}`;
+}
+function loadManualMarksForDay(dateKey) {
+  manualMarksByRace.clear();
+  if (!dateKey || !window.RACES?.[dateKey]) return;
+  for (const r of window.RACES[dateKey]) {
+    try {
+      const raw = localStorage.getItem(`sailing.manualMarks.${dateKey}.${r.name}`);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr) && arr.length) manualMarksByRace.set(r.name, arr);
+      }
+    } catch { /* corrupt entry */ }
+  }
+}
+function saveManualMarks(raceName) {
+  const arr = manualMarksByRace.get(raceName);
+  const key = manualMarksKey(raceName);
+  if (arr && arr.length) localStorage.setItem(key, JSON.stringify(arr));
+  else localStorage.removeItem(key);
+}
+// What marks should be displayed for `raceName`? Manual marks win if any
+// exist; otherwise fall back to the auto-detected raceMarks.
+function effectiveMarksFor(raceName) {
+  const manual = manualMarksByRace.get(raceName);
+  if (manual && manual.length) {
+    return manual.map((m) => ({
+      lat: m.lat, lon: m.lon, label: m.label, manual: true,
+      rounded: [], // count empty for manual marks
+    }));
+  }
+  return raceMarks.get(raceName) || [];
+}
+
 // Helper: average true-wind direction across an arbitrary point series.
 function avgWindFor(track, race) {
   let avg = null, sx = 0, sy = 0, c = 0;
@@ -2457,23 +2499,39 @@ function visibleRaceForMarks() {
 }
 
 let lastRenderedMarksRace = null;
-function renderRaceMarksOnMap() {
+function renderRaceMarksOnMap(force) {
   const activeRaceName = visibleRaceForMarks();
-  if (activeRaceName === lastRenderedMarksRace) return;
+  if (!force && activeRaceName === lastRenderedMarksRace) return;
   lastRenderedMarksRace = activeRaceName;
   markRoundingsLayer.clearLayers();
   if (!activeRaceName) return;
-  const marks = raceMarks.get(activeRaceName) || [];
+  const marks = effectiveMarksFor(activeRaceName);
   for (const m of marks) {
-    L.marker([m.lat, m.lon], {
+    const isManual = !!m.manual;
+    const cls = isManual ? "mark-icon manual" : "mark-icon";
+    const tip = isManual
+      ? `${m.label} · ${activeRaceName} · manual (click to delete)`
+      : `${m.label} mark · ${activeRaceName} · inferred from ${m.rounded.length} rounding${m.rounded.length > 1 ? "s" : ""}`;
+    const marker = L.marker([m.lat, m.lon], {
       icon: L.divIcon({
-        html: `<div class="mark-icon">${m.label}</div>`,
+        html: `<div class="${cls}">${m.label}</div>`,
         className: "", iconSize: [26, 26], iconAnchor: [13, 13],
       }),
       interactive: true, zIndexOffset: 300,
-    })
-    .bindTooltip(`${m.label} mark · ${activeRaceName} · inferred from ${m.rounded.length} rounding${m.rounded.length > 1 ? "s" : ""}`)
-    .addTo(markRoundingsLayer);
+    }).bindTooltip(tip).addTo(markRoundingsLayer);
+    if (isManual) {
+      marker.on("click", () => {
+        if (!confirm(`Delete manual ${m.label} mark from ${activeRaceName}?`)) return;
+        const arr = manualMarksByRace.get(activeRaceName) || [];
+        const idx = arr.findIndex((x) =>
+          Math.abs(x.lat - m.lat) < 1e-7 && Math.abs(x.lon - m.lon) < 1e-7);
+        if (idx >= 0) arr.splice(idx, 1);
+        if (!arr.length) manualMarksByRace.delete(activeRaceName);
+        saveManualMarks(activeRaceName);
+        renderRaceMarksOnMap(true);
+        renderLaylinesOnMap();
+      });
+    }
   }
 }
 
@@ -2912,6 +2970,40 @@ document.getElementById("copyLinkBtn")?.addEventListener("click", () => {
   });
 });
 
+// Manual mark placement: toggle edit mode, then click the map to drop a mark
+// for the currently visible race. Manual marks override auto-detected ones
+// and persist via localStorage. Click an existing manual mark to delete it.
+const editMarksBtn = document.getElementById("editMarksBtn");
+function setMarkEditMode(on) {
+  manualMarkEditMode = !!on;
+  if (editMarksBtn) {
+    editMarksBtn.classList.toggle("active", manualMarkEditMode);
+    editMarksBtn.textContent = manualMarkEditMode
+      ? "Click map to place — done"
+      : "+ Place mark";
+  }
+  document.body.classList.toggle("mark-edit-mode", manualMarkEditMode);
+}
+editMarksBtn?.addEventListener("click", () => setMarkEditMode(!manualMarkEditMode));
+map.on("click", (e) => {
+  if (!manualMarkEditMode) return;
+  const activeRaceName = visibleRaceForMarks() || activeRaceFilter ||
+    (window.RACES?.[activeDayKey] || [])[0]?.name;
+  if (!activeRaceName) {
+    alert("Pick a race tab first, then click the map to place a mark.");
+    return;
+  }
+  const label = (prompt("Mark label? (W = windward, L = leeward, O = offset, F = finish)", "W") || "").trim().toUpperCase().slice(0, 4);
+  if (!label) return;
+  if (!manualMarksByRace.has(activeRaceName)) manualMarksByRace.set(activeRaceName, []);
+  manualMarksByRace.get(activeRaceName).push({
+    lat: e.latlng.lat, lon: e.latlng.lng, label,
+  });
+  saveManualMarks(activeRaceName);
+  renderRaceMarksOnMap(true);
+  if (typeof renderLaylinesOnMap === "function") renderLaylinesOnMap();
+});
+
 // Ghost boats: wired off by default, exposed via a small toggle.
 // (Lives in the race-stats panel for now.)
 const exportRow = document.getElementById("rsExport");
@@ -3188,6 +3280,10 @@ async function selectDay(key) {
   if (activeDayKey === key) return;
   clearTracks();
   activeDayKey = key;
+  // Drop any in-progress mark-edit mode and load this day's stored manual
+  // marks before tracks render so renderRaceMarksOnMap sees them.
+  setMarkEditMode(false);
+  loadManualMarksForDay(key);
   renderDayList();
   renderWindForDay(key);
   renderWindBarb(key);
