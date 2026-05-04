@@ -950,6 +950,108 @@ function renderWindShadows() {
   }
 }
 
+// ---------- Ladder rungs ----------
+// Imaginary horizontal lines across the upwind leg, perpendicular to the
+// true wind. Boats on the same rung are tied "ladder rungs up the beat".
+// Drawn between the active race's start line and its windward (W) mark,
+// 10 evenly-spaced rungs. Width = 1.5× upwind-leg length to comfortably
+// cover typical fleet spread on either side of the rhumb.
+const LS_LADDER = "sailing.ladderRungs";
+let ladderRungsShown = localStorage.getItem(LS_LADDER) === "1";
+const ladderRungsLayer = L.layerGroup();
+if (ladderRungsShown) ladderRungsLayer.addTo(map);
+
+function startLineForRace(raceName) {
+  for (const tr of tracks) {
+    if (tr.removed) continue;
+    if (tr.meta?.race?.name !== raceName) continue;
+    const sm = tr.meta?.startMarks;
+    if (sm?.rc && sm?.pin) return sm;
+  }
+  return null;
+}
+
+function renderLadderRungs() {
+  ladderRungsLayer.clearLayers();
+  if (!ladderRungsShown) return;
+  const activeRaceName = visibleRaceForMarks();
+  if (!activeRaceName) return;
+  const sm = startLineForRace(activeRaceName);
+  if (!sm) return;
+  const marks = effectiveMarksFor(activeRaceName);
+  const wMark = marks.find((m) => m.label && m.label.toUpperCase().startsWith("W"));
+  if (!wMark) return;
+  const windDeg = raceWindByName.get(activeRaceName);
+  if (windDeg == null) return;
+
+  // Project a point P onto the wind axis through the windward mark.
+  // Returns the signed metres "downwind from W" (positive = away from W
+  // along the wind-FROM bearing × -1 i.e. toward the start).
+  // We work in a local flat-earth frame centred on the windward mark.
+  const lat0 = wMark.lat, lon0 = wMark.lon;
+  const mPerDegLat = 111111;
+  const mPerDegLon = 111111 * Math.cos(lat0 * Math.PI / 180);
+  const toXY = (lat, lon) => ({
+    x: (lon - lon0) * mPerDegLon, // east+
+    y: (lat - lat0) * mPerDegLat, // north+
+  });
+  const fromXY = (x, y) => [lat0 + y / mPerDegLat, lon0 + x / mPerDegLon];
+
+  // Wind direction vectors (unit). Wind FROM bearing → "upwind unit" points
+  // toward the source (i.e., from start toward W mark, roughly).
+  const windRad = windDeg * Math.PI / 180;
+  const upwindEN = { e: Math.sin(windRad), n: Math.cos(windRad) }; // points toward wind source
+  // Perpendicular to wind axis (rotate 90° CW): used as the rung direction.
+  const perpEN = { e: upwindEN.n, n: -upwindEN.e };
+
+  const startMid = {
+    lat: (sm.rc.lat + sm.pin.lat) / 2,
+    lon: (sm.rc.lon + sm.pin.lon) / 2,
+  };
+  const startXY = toXY(startMid.lat, startMid.lon);
+  // Distance from start mid back along the (negative) wind axis to the
+  // windward mark. Project startXY onto upwindEN (W mark is at origin).
+  const distAlongWind = -(startXY.x * upwindEN.e + startXY.y * upwindEN.n);
+  // distAlongWind > 0 means start is downwind of W (the normal case).
+  if (distAlongWind <= 0) return;
+
+  const rungCount = 10;
+  const halfWidth = distAlongWind * 0.75; // 1.5× total
+  for (let i = 1; i < rungCount; i++) {
+    const frac = i / rungCount;
+    const along = distAlongWind * frac;
+    // Rung centre: along the negative-upwind direction from the W mark.
+    const cx = -upwindEN.e * along;
+    const cy = -upwindEN.n * along;
+    const a = fromXY(cx + perpEN.e * halfWidth, cy + perpEN.n * halfWidth);
+    const b = fromXY(cx - perpEN.e * halfWidth, cy - perpEN.n * halfWidth);
+    const isMid = i === 5;
+    const line = L.polyline([a, b], {
+      color: "#a3c7f0",
+      weight: isMid ? 1.4 : 1,
+      opacity: isMid ? 0.55 : 0.32,
+      dashArray: "3 5",
+      interactive: false,
+    });
+    line.addTo(ladderRungsLayer);
+  }
+}
+
+const ladderRungsToggle = document.getElementById("ladderRungsToggle");
+if (ladderRungsToggle) {
+  ladderRungsToggle.checked = ladderRungsShown;
+  ladderRungsToggle.addEventListener("change", () => {
+    ladderRungsShown = ladderRungsToggle.checked;
+    localStorage.setItem(LS_LADDER, ladderRungsShown ? "1" : "0");
+    if (ladderRungsShown) {
+      ladderRungsLayer.addTo(map);
+      renderLadderRungs();
+    } else {
+      map.removeLayer(ladderRungsLayer);
+    }
+  });
+}
+
 const windShadowToggle = document.getElementById("windShadowToggle");
 if (windShadowToggle) {
   windShadowToggle.checked = windShadowsShown;
@@ -2908,6 +3010,7 @@ function updateBoatsToRaceTime(t) {
   tickGhosts();
   refreshStartCountdown();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap();
+  renderLadderRungs();
   renderWindShadows();
   update3DBoats(raceTime);
   tickTrackLegend();
