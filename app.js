@@ -1006,17 +1006,13 @@ function renderLadderRungs() {
     if (window.__ladderDebug) console.log("ladder: no W mark for", activeRaceName, "marks:", marks.map((m) => m.label));
     return;
   }
-  const windDeg = raceWindByName.get(activeRaceName);
-  if (windDeg == null) {
-    if (window.__ladderDebug) console.log("ladder: no wind dir for", activeRaceName);
-    return;
-  }
 
-  // Project a point P onto the wind axis through the windward mark.
-  // Returns the signed metres "downwind from W" (positive = away from W
-  // along the wind-FROM bearing × -1 i.e. toward the start).
-  // We work in a local flat-earth frame centred on the windward mark.
-  const lat0 = wMark.lat, lon0 = wMark.lon;
+  // Local flat-earth frame centred on the start-line midpoint.
+  const startMid = {
+    lat: (sm.rc.lat + sm.pin.lat) / 2,
+    lon: (sm.rc.lon + sm.pin.lon) / 2,
+  };
+  const lat0 = startMid.lat, lon0 = startMid.lon;
   const mPerDegLat = 111111;
   const mPerDegLon = 111111 * Math.cos(lat0 * Math.PI / 180);
   const toXY = (lat, lon) => ({
@@ -1025,48 +1021,50 @@ function renderLadderRungs() {
   });
   const fromXY = (x, y) => [lat0 + y / mPerDegLat, lon0 + x / mPerDegLon];
 
-  // Wind direction vectors (unit). Wind FROM bearing → "upwind unit" points
-  // toward the source (i.e., from start toward W mark, roughly).
-  const windRad = windDeg * Math.PI / 180;
-  const upwindEN = { e: Math.sin(windRad), n: Math.cos(windRad) }; // points toward wind source
-  // Perpendicular to wind axis (rotate 90° CW): used as the rung direction.
-  const perpEN = { e: upwindEN.n, n: -upwindEN.e };
-
-  const startMid = {
-    lat: (sm.rc.lat + sm.pin.lat) / 2,
-    lon: (sm.rc.lon + sm.pin.lon) / 2,
-  };
-  const startXY = toXY(startMid.lat, startMid.lon);
-  // Distance from start mid back along the (negative) wind axis to the
-  // windward mark. Project startXY onto upwindEN (W mark is at origin).
-  const distAlongWind = -(startXY.x * upwindEN.e + startXY.y * upwindEN.n);
-  // distAlongWind > 0 means start is downwind of W (the normal case).
-  if (distAlongWind <= 0) return;
+  // Start-line direction (RC → pin) and its length.
+  const rcXY = toXY(sm.rc.lat, sm.rc.lon);
+  const pinXY = toXY(sm.pin.lat, sm.pin.lon);
+  const lineVec = { x: pinXY.x - rcXY.x, y: pinXY.y - rcXY.y };
+  const lineLen = Math.hypot(lineVec.x, lineVec.y);
+  if (lineLen < 1) return; // degenerate
+  const lineUnit = { x: lineVec.x / lineLen, y: lineVec.y / lineLen };
+  // Perpendicular (rotate +90° CCW). One of ±perp points to the W mark;
+  // pick whichever gives a positive projection onto the wMark vector.
+  const perpA = { x: -lineUnit.y, y: lineUnit.x };
+  const wXY = toXY(wMark.lat, wMark.lon); // start mid is origin
+  let perp = perpA;
+  const dot = wXY.x * perpA.x + wXY.y * perpA.y;
+  if (dot < 0) perp = { x: -perpA.x, y: -perpA.y };
+  // Distance from start line to W mark along the upwind axis.
+  const distToW = Math.abs(wXY.x * perp.x + wXY.y * perp.y);
+  if (distToW <= 0) return;
 
   const rungCount = 10;
-  const halfWidth = distAlongWind * 0.75; // 1.5× total
+  // Width of each rung — 1.5× start-line length so it covers the typical
+  // upwind fan of the fleet without crossing the whole map.
+  const halfWidth = lineLen * 0.75;
   for (let i = 1; i < rungCount; i++) {
     const frac = i / rungCount;
-    const along = distAlongWind * frac;
-    // Rung centre: along the negative-upwind direction from the W mark.
-    const cx = -upwindEN.e * along;
-    const cy = -upwindEN.n * along;
-    const a = fromXY(cx + perpEN.e * halfWidth, cy + perpEN.n * halfWidth);
-    const b = fromXY(cx - perpEN.e * halfWidth, cy - perpEN.n * halfWidth);
+    const along = distToW * frac;
+    const cx = perp.x * along;
+    const cy = perp.y * along;
+    // Rung is parallel to the start line (along lineUnit), centred on the
+    // axis from start-line-mid to the W mark.
+    const a = fromXY(cx + lineUnit.x * halfWidth, cy + lineUnit.y * halfWidth);
+    const b = fromXY(cx - lineUnit.x * halfWidth, cy - lineUnit.y * halfWidth);
     const isMid = i === 5;
-    const line = L.polyline([a, b], {
-      color: "#ffd166",
+    L.polyline([a, b], {
+      color: "#000000",
       weight: isMid ? 2.5 : 1.8,
-      opacity: isMid ? 0.85 : 0.65,
+      opacity: isMid ? 0.9 : 0.7,
       dashArray: "6 6",
       interactive: false,
-    });
-    line.addTo(ladderRungsLayer);
+    }).addTo(ladderRungsLayer);
   }
   if (window.__ladderDebug) {
     console.log("ladder: drew", rungCount - 1, "rungs for", activeRaceName,
-      "leg", distAlongWind.toFixed(0), "m, halfWidth", halfWidth.toFixed(0), "m",
-      "windDeg", windDeg.toFixed(0), "wMark", wMark.label, [wMark.lat, wMark.lon]);
+      "leg", distToW.toFixed(0), "m, halfWidth", halfWidth.toFixed(0), "m,",
+      "lineLen", lineLen.toFixed(0), "m, wMark", wMark.label, [wMark.lat, wMark.lon]);
   }
 }
 
