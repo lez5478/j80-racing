@@ -1055,13 +1055,18 @@ function renderLadderRungs() {
     const b = fromXY(cx - perpEN.e * halfWidth, cy - perpEN.n * halfWidth);
     const isMid = i === 5;
     const line = L.polyline([a, b], {
-      color: "#a3c7f0",
-      weight: isMid ? 1.4 : 1,
-      opacity: isMid ? 0.55 : 0.32,
-      dashArray: "3 5",
+      color: "#ffd166",
+      weight: isMid ? 2.5 : 1.8,
+      opacity: isMid ? 0.85 : 0.65,
+      dashArray: "6 6",
       interactive: false,
     });
     line.addTo(ladderRungsLayer);
+  }
+  if (window.__ladderDebug) {
+    console.log("ladder: drew", rungCount - 1, "rungs for", activeRaceName,
+      "leg", distAlongWind.toFixed(0), "m, halfWidth", halfWidth.toFixed(0), "m",
+      "windDeg", windDeg.toFixed(0), "wMark", wMark.label, [wMark.lat, wMark.lon]);
   }
 }
 
