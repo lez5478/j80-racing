@@ -1058,13 +1058,14 @@ function renderLadderRungs() {
     const cy = -upwindEN.n * along;
     const a = fromXY(cx + perpEN.e * halfWidth, cy + perpEN.n * halfWidth);
     const b = fromXY(cx - perpEN.e * halfWidth, cy - perpEN.n * halfWidth);
-    const isStartLevel = i === rungCount; // rung passing through the start line level
+    const isStartLevel = i === rungCount; // rung at the start-line level
     const isMid = i === Math.round(rungCount / 2);
+    const emphasised = isStartLevel || isMid;
     L.polyline([a, b], {
       color: "#000000",
-      weight: isStartLevel ? 2.8 : isMid ? 2.2 : 1.5,
-      opacity: isStartLevel ? 1 : isMid ? 0.85 : 0.6,
-      dashArray: isStartLevel ? "10 6" : "6 6",
+      weight: emphasised ? 2.2 : 1.5,
+      opacity: emphasised ? 0.85 : 0.6,
+      dashArray: "6 6",
       interactive: false,
     }).addTo(ladderRungsLayer);
   }
