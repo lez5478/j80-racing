@@ -971,18 +971,46 @@ function startLineForRace(raceName) {
   return null;
 }
 
+// Pick the race for ladder display — unlike visibleRaceForMarks() this
+// works pre-start (rungs are most useful BEFORE the gun). Prefers the
+// active race tab; falls back to the first race of the day that has a
+// start line + windward mark + wind direction.
+function ladderRaceName() {
+  if (activeRaceFilter) return activeRaceFilter;
+  const seen = new Set();
+  for (const t of tracks) {
+    if (t.removed || !t.meta?.race) continue;
+    const r = t.meta.race;
+    if (seen.has(r.name)) continue;
+    seen.add(r.name);
+    if (startLineForRace(r.name) && raceWindByName.has(r.name)) return r.name;
+  }
+  return null;
+}
 function renderLadderRungs() {
   ladderRungsLayer.clearLayers();
   if (!ladderRungsShown) return;
-  const activeRaceName = visibleRaceForMarks();
-  if (!activeRaceName) return;
+  const activeRaceName = ladderRaceName();
+  if (!activeRaceName) {
+    if (window.__ladderDebug) console.log("ladder: no active race");
+    return;
+  }
   const sm = startLineForRace(activeRaceName);
-  if (!sm) return;
+  if (!sm) {
+    if (window.__ladderDebug) console.log("ladder: no start line for", activeRaceName);
+    return;
+  }
   const marks = effectiveMarksFor(activeRaceName);
   const wMark = marks.find((m) => m.label && m.label.toUpperCase().startsWith("W"));
-  if (!wMark) return;
+  if (!wMark) {
+    if (window.__ladderDebug) console.log("ladder: no W mark for", activeRaceName, "marks:", marks.map((m) => m.label));
+    return;
+  }
   const windDeg = raceWindByName.get(activeRaceName);
-  if (windDeg == null) return;
+  if (windDeg == null) {
+    if (window.__ladderDebug) console.log("ladder: no wind dir for", activeRaceName);
+    return;
+  }
 
   // Project a point P onto the wind axis through the windward mark.
   // Returns the signed metres "downwind from W" (positive = away from W
