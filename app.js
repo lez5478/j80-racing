@@ -885,6 +885,86 @@ if (windParticleToggle) {
   });
 }
 
+// ---------- Wind shadow behind boats ----------
+// Each boat carries a "shadow cone" extending downwind from its mast.
+// Length scales inversely with true wind speed (in light air the wake
+// of disturbed air persists much further before re-energising). The
+// J/80 has a ~11 m mast — shadows of ~3-7 mast lengths is typical.
+//
+// Geometry: a wedge polygon, apex at the boat, fanning out at half-angle
+// 12° to a length L. Drawn as a translucent grey overlay so you can see
+// when one boat is "shading" another upwind in the line.
+const LS_WIND_SHADOW = "sailing.windShadow";
+let windShadowsShown = localStorage.getItem(LS_WIND_SHADOW) === "1";
+const windShadowLayer = L.layerGroup();
+if (windShadowsShown) windShadowLayer.addTo(map);
+const J80_MAST_M = 11; // J/80 mast height (≈ 36 ft)
+
+// Project a small lat/lon offset given metres-east + metres-north.
+function offsetLatLon(lat, lon, metresE, metresN) {
+  const dLat = metresN / 111111;
+  const dLon = metresE / (111111 * Math.cos(lat * Math.PI / 180));
+  return [lat + dLat, lon + dLon];
+}
+
+// Build the wedge polygon for a boat at (lat, lon) given the wind direction
+// (FROM, degrees) and true wind speed in km/h. Returns Leaflet latlng array.
+function windShadowPolygon(lat, lon, windDeg, twsKmh) {
+  const twsKn = twsKmh * 0.539957;
+  // Length L = mast × multiplier, multiplier shrinks as wind grows.
+  // Tuned so 5 kn → ~7H ≈ 77 m, 10 kn → ~5H ≈ 55 m, 18 kn → ~3H ≈ 33 m.
+  const mult = Math.max(2.5, Math.min(8, 11 / Math.max(twsKn, 2.5) * 2.2));
+  const L = J80_MAST_M * mult;
+  // Wind goes TO bearing (windDeg + 180). The shadow extends in that direction.
+  const toRad = (windDeg + 180) * Math.PI / 180;
+  const halfAngle = 12 * Math.PI / 180;
+  // 5 points: apex (boat), + 4 around the cone end (small arc).
+  const pts = [[lat, lon]];
+  const angles = [-halfAngle, -halfAngle * 0.5, 0, halfAngle * 0.5, halfAngle];
+  for (const a of angles) {
+    const dir = toRad + a;
+    // East = sin(bearing), North = cos(bearing) — bearing is from north clockwise.
+    const e = Math.sin(dir) * L;
+    const n = Math.cos(dir) * L;
+    pts.push(offsetLatLon(lat, lon, e, n));
+  }
+  return pts;
+}
+
+function renderWindShadows() {
+  windShadowLayer.clearLayers();
+  if (!windShadowsShown || !windAtBoatFn) return;
+  for (const tr of tracks) {
+    if (tr.removed || !tr.visible) continue;
+    const ll = tr.boat.getLatLng();
+    const w = windAtBoatFn(raceTime, ll.lat, ll.lng);
+    if (!w || w.deg == null || w.spd == null || w.spd < 1) continue;
+    const poly = windShadowPolygon(ll.lat, ll.lng, w.deg, w.spd);
+    L.polygon(poly, {
+      stroke: false,
+      fill: true,
+      fillColor: "#1a2535",
+      fillOpacity: 0.32,
+      interactive: false,
+    }).addTo(windShadowLayer);
+  }
+}
+
+const windShadowToggle = document.getElementById("windShadowToggle");
+if (windShadowToggle) {
+  windShadowToggle.checked = windShadowsShown;
+  windShadowToggle.addEventListener("change", () => {
+    windShadowsShown = windShadowToggle.checked;
+    localStorage.setItem(LS_WIND_SHADOW, windShadowsShown ? "1" : "0");
+    if (windShadowsShown) {
+      windShadowLayer.addTo(map);
+      renderWindShadows();
+    } else {
+      map.removeLayer(windShadowLayer);
+    }
+  });
+}
+
 // ---------- HKO wind text panel (live, synced to race clock) ----------
 // window.WIND_STATIONS : { "Lamma Island": "Lamma Island", ... }
 // window.WIND_HOURLY   : { "YYYY-MM-DD": { "Lamma Island": [
@@ -2828,6 +2908,7 @@ function updateBoatsToRaceTime(t) {
   tickGhosts();
   refreshStartCountdown();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap();
+  renderWindShadows();
   update3DBoats(raceTime);
   tickTrackLegend();
   syncUrlState();
