@@ -1006,13 +1006,19 @@ function renderLadderRungs() {
     if (window.__ladderDebug) console.log("ladder: no W mark for", activeRaceName, "marks:", marks.map((m) => m.label));
     return;
   }
+  const windDeg = raceWindByName.get(activeRaceName);
+  if (windDeg == null) {
+    if (window.__ladderDebug) console.log("ladder: no wind dir for", activeRaceName);
+    return;
+  }
 
-  // Local flat-earth frame centred on the start-line midpoint.
-  const startMid = {
-    lat: (sm.rc.lat + sm.pin.lat) / 2,
-    lon: (sm.rc.lon + sm.pin.lon) / 2,
-  };
-  const lat0 = startMid.lat, lon0 = startMid.lon;
+  // Local flat-earth frame centred on the windward mark (rung "0").
+  // We project everything onto the wind axis through W, so the rungs
+  // stay perpendicular to the true wind regardless of line bias —
+  // which is exactly what makes the bias visible (the favoured end of
+  // the start line will sit further along the rung axis = "higher up
+  // the ladder" before the gun).
+  const lat0 = wMark.lat, lon0 = wMark.lon;
   const mPerDegLat = 111111;
   const mPerDegLon = 111111 * Math.cos(lat0 * Math.PI / 180);
   const toXY = (lat, lon) => ({
@@ -1021,50 +1027,51 @@ function renderLadderRungs() {
   });
   const fromXY = (x, y) => [lat0 + y / mPerDegLat, lon0 + x / mPerDegLon];
 
-  // Start-line direction (RC → pin) and its length.
-  const rcXY = toXY(sm.rc.lat, sm.rc.lon);
-  const pinXY = toXY(sm.pin.lat, sm.pin.lon);
-  const lineVec = { x: pinXY.x - rcXY.x, y: pinXY.y - rcXY.y };
-  const lineLen = Math.hypot(lineVec.x, lineVec.y);
-  if (lineLen < 1) return; // degenerate
-  const lineUnit = { x: lineVec.x / lineLen, y: lineVec.y / lineLen };
-  // Perpendicular (rotate +90° CCW). One of ±perp points to the W mark;
-  // pick whichever gives a positive projection onto the wMark vector.
-  const perpA = { x: -lineUnit.y, y: lineUnit.x };
-  const wXY = toXY(wMark.lat, wMark.lon); // start mid is origin
-  let perp = perpA;
-  const dot = wXY.x * perpA.x + wXY.y * perpA.y;
-  if (dot < 0) perp = { x: -perpA.x, y: -perpA.y };
-  // Distance from start line to W mark along the upwind axis.
-  const distToW = Math.abs(wXY.x * perp.x + wXY.y * perp.y);
-  if (distToW <= 0) return;
+  // Wind FROM bearing → upwind unit points toward the wind source.
+  const windRad = windDeg * Math.PI / 180;
+  const upwindEN = { e: Math.sin(windRad), n: Math.cos(windRad) };
+  // Perpendicular (rung direction): rotate 90° CW.
+  const perpEN = { e: upwindEN.n, n: -upwindEN.e };
+
+  const startMid = {
+    lat: (sm.rc.lat + sm.pin.lat) / 2,
+    lon: (sm.rc.lon + sm.pin.lon) / 2,
+  };
+  const startXY = toXY(startMid.lat, startMid.lon);
+  // Distance from start mid back along the wind axis to the windward mark.
+  const distAlongWind = -(startXY.x * upwindEN.e + startXY.y * upwindEN.n);
+  if (distAlongWind <= 0) return;
+
+  // Rung width: 1.5× the start-line length so the bias gap is easy to read.
+  const lineLen = Math.hypot(
+    (sm.pin.lat - sm.rc.lat) * mPerDegLat,
+    (sm.pin.lon - sm.rc.lon) * mPerDegLon,
+  );
+  const halfWidth = Math.max(lineLen * 0.75, distAlongWind * 0.5);
 
   const rungCount = 10;
-  // Width of each rung — 1.5× start-line length so it covers the typical
-  // upwind fan of the fleet without crossing the whole map.
-  const halfWidth = lineLen * 0.75;
-  for (let i = 1; i < rungCount; i++) {
+  for (let i = 1; i <= rungCount; i++) {
     const frac = i / rungCount;
-    const along = distToW * frac;
-    const cx = perp.x * along;
-    const cy = perp.y * along;
-    // Rung is parallel to the start line (along lineUnit), centred on the
-    // axis from start-line-mid to the W mark.
-    const a = fromXY(cx + lineUnit.x * halfWidth, cy + lineUnit.y * halfWidth);
-    const b = fromXY(cx - lineUnit.x * halfWidth, cy - lineUnit.y * halfWidth);
-    const isMid = i === 5;
+    const along = distAlongWind * frac;
+    // Rung centre lies on the wind axis through W, stepped downwind.
+    const cx = -upwindEN.e * along;
+    const cy = -upwindEN.n * along;
+    const a = fromXY(cx + perpEN.e * halfWidth, cy + perpEN.n * halfWidth);
+    const b = fromXY(cx - perpEN.e * halfWidth, cy - perpEN.n * halfWidth);
+    const isStartLevel = i === rungCount; // rung passing through the start line level
+    const isMid = i === Math.round(rungCount / 2);
     L.polyline([a, b], {
       color: "#000000",
-      weight: isMid ? 2.5 : 1.8,
-      opacity: isMid ? 0.9 : 0.7,
-      dashArray: "6 6",
+      weight: isStartLevel ? 2.8 : isMid ? 2.2 : 1.5,
+      opacity: isStartLevel ? 1 : isMid ? 0.85 : 0.6,
+      dashArray: isStartLevel ? "10 6" : "6 6",
       interactive: false,
     }).addTo(ladderRungsLayer);
   }
   if (window.__ladderDebug) {
-    console.log("ladder: drew", rungCount - 1, "rungs for", activeRaceName,
-      "leg", distToW.toFixed(0), "m, halfWidth", halfWidth.toFixed(0), "m,",
-      "lineLen", lineLen.toFixed(0), "m, wMark", wMark.label, [wMark.lat, wMark.lon]);
+    console.log("ladder: drew", rungCount, "rungs for", activeRaceName,
+      "leg", distAlongWind.toFixed(0), "m, halfWidth", halfWidth.toFixed(0), "m,",
+      "windDeg", windDeg.toFixed(0), "lineLen", lineLen.toFixed(0), "m");
   }
 }
 
