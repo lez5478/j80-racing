@@ -448,13 +448,25 @@ function addTrack(name, points, meta = {}) {
     if (startMarks.rc) {
       const rcMark = L.circleMarker([startMarks.rc.lat, startMarks.rc.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: RC_COLOR, fillOpacity: 1,
-      }).bindTooltip(`RC end · ${name}`);
+      }).bindTooltip(`RC end · ${name} (click in edit mode to set as canonical)`);
+      rcMark.on("click", () => {
+        if (!startLineEditMode) return;
+        const r = meta?.race?.name;
+        if (!r) return;
+        pickCanonicalEnd(r, "rc", { lat: startMarks.rc.lat, lng: startMarks.rc.lon });
+      });
       layerChildren.push(rcMark);
     }
     if (startMarks.pin) {
       const pinMark = L.circleMarker([startMarks.pin.lat, startMarks.pin.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: PIN_COLOR, fillOpacity: 1,
-      }).bindTooltip(`Pin end · ${name}`);
+      }).bindTooltip(`Pin end · ${name} (click in edit mode to set as canonical)`);
+      pinMark.on("click", () => {
+        if (!startLineEditMode) return;
+        const r = meta?.race?.name;
+        if (!r) return;
+        pickCanonicalEnd(r, "pin", { lat: startMarks.pin.lat, lng: startMarks.pin.lon });
+      });
       layerChildren.push(pinMark);
     }
     if (startMarks.rc && startMarks.pin) {
@@ -1017,6 +1029,135 @@ function renderStartLineSourcePicker() {
     localStorage.setItem(startLineKey(raceName), sel.value);
     renderLadderRungs();
   };
+}
+
+// ---------- Canonical (admin-curated) start lines ----------
+// Per (date, race) the user can keep one boat's RC ping and another
+// boat's pin ping, build the "real" start line, and re-run analysis
+// for every boat with that line. Stored in localStorage; survives
+// reload. Server sync mirrors the manual-marks pattern (TODO).
+const canonicalStartLines = new Map(); // raceName → { rc, pin, ts }
+let startLineEditMode = false;
+
+function canonStartLineKey(raceName) {
+  return `sailing.canonStartLine.${activeDayKey}.${raceName}`;
+}
+function loadCanonicalStartLinesForDay(dateKey) {
+  canonicalStartLines.clear();
+  if (!dateKey || !window.RACES?.[dateKey]) return;
+  for (const r of window.RACES[dateKey]) {
+    try {
+      const raw = localStorage.getItem(`sailing.canonStartLine.${dateKey}.${r.name}`);
+      if (raw) {
+        const obj = JSON.parse(raw);
+        if (obj?.rc?.lat != null && obj?.pin?.lat != null) {
+          canonicalStartLines.set(r.name, obj);
+        }
+      }
+    } catch { /* corrupt entry */ }
+  }
+}
+function saveCanonicalStartLine(raceName) {
+  const obj = canonicalStartLines.get(raceName);
+  if (obj) localStorage.setItem(canonStartLineKey(raceName), JSON.stringify(obj));
+  else localStorage.removeItem(canonStartLineKey(raceName));
+}
+// Push the chosen rc+pin into every track of that race so analyzeRace
+// (and every existing call site that reads track.meta.startMarks) sees
+// the curated values without us having to thread a new param through
+// dozens of functions.
+function applyCanonicalStartLineToTracks(raceName) {
+  const obj = canonicalStartLines.get(raceName);
+  if (!obj) return;
+  for (const t of tracks) {
+    if (t.removed) continue;
+    if (t.meta?.race?.name !== raceName) continue;
+    if (!t.meta.startMarks) t.meta.startMarks = {};
+    t.meta.startMarks.rc = { ...obj.rc };
+    t.meta.startMarks.pin = { ...obj.pin };
+  }
+}
+const canonicalStartLineLayer = L.layerGroup().addTo(map);
+function renderCanonicalStartLine() {
+  canonicalStartLineLayer.clearLayers();
+  const raceName = ladderRaceName();
+  if (!raceName) return;
+  const obj = canonicalStartLines.get(raceName);
+  if (!obj?.rc || !obj?.pin) return;
+  // Bright cyan line so it stands out from the per-boat dashed lines.
+  L.polyline([
+    [obj.rc.lat, obj.rc.lon],
+    [obj.pin.lat, obj.pin.lon],
+  ], {
+    color: "#22d3ee", weight: 3, opacity: 0.95, dashArray: "8 4",
+  }).bindTooltip(`Canonical start line · ${raceName}`).addTo(canonicalStartLineLayer);
+  // Highlight chosen endpoints.
+  for (const [end, ll] of [["RC", obj.rc], ["Pin", obj.pin]]) {
+    L.circleMarker([ll.lat, ll.lon], {
+      radius: 8, weight: 3, color: "#22d3ee", fillColor: "#0e1a2b", fillOpacity: 0.4,
+    }).bindTooltip(`Canonical ${end} · click to remove`)
+      .on("click", () => {
+        if (!confirm(`Remove canonical ${end} for ${raceName}?`)) return;
+        const cur = canonicalStartLines.get(raceName);
+        if (!cur) return;
+        if (end === "RC") delete cur.rc; else delete cur.pin;
+        if (!cur.rc && !cur.pin) canonicalStartLines.delete(raceName);
+        else canonicalStartLines.set(raceName, cur);
+        saveCanonicalStartLine(raceName);
+        if (cur.rc && cur.pin) applyCanonicalStartLineToTracks(raceName);
+        renderCanonicalStartLine();
+        renderLadderRungs();
+        if (selectedTrackId != null) selectTrack(selectedTrackId);
+      })
+      .addTo(canonicalStartLineLayer);
+  }
+}
+
+// Hook this into addTrack: when in edit mode, clicking any boat's RC or
+// pin ping designates it as the canonical RC/pin for that race.
+function pickCanonicalEnd(raceName, end /* "rc" | "pin" */, latlng) {
+  if (!raceName) return;
+  const cur = canonicalStartLines.get(raceName) || {};
+  cur[end] = { lat: latlng.lat, lon: latlng.lon };
+  cur.ts = Date.now();
+  canonicalStartLines.set(raceName, cur);
+  saveCanonicalStartLine(raceName);
+  // Once we have BOTH ends, push to every track in this race and refresh.
+  if (cur.rc && cur.pin) {
+    applyCanonicalStartLineToTracks(raceName);
+    if (selectedTrackId != null) {
+      // Re-render the sidebar for the selected track so its start
+      // analysis (Dist at gun / Late by …) reflects the new line.
+      const t = tracks[selectedTrackId];
+      if (t?.meta?.race?.name === raceName) selectTrack(selectedTrackId);
+    }
+  }
+  renderCanonicalStartLine();
+  renderLadderRungs();
+}
+
+const editStartLineBtn = document.createElement("button");
+editStartLineBtn.id = "editStartLineBtn";
+editStartLineBtn.className = "rs-btn";
+editStartLineBtn.type = "button";
+editStartLineBtn.textContent = "✎ Edit start line";
+editStartLineBtn.style.cssText =
+  "display:none;width:100%;margin:0 0 4px;padding:8px;font-size:12px;";
+// Insert after the manual-marks button (which sits above raceTabs).
+raceTabsEl.parentNode.insertBefore(editStartLineBtn, raceTabsEl);
+
+function setStartLineEditMode(on) {
+  startLineEditMode = !!on;
+  editStartLineBtn.classList.toggle("active", startLineEditMode);
+  editStartLineBtn.textContent = startLineEditMode
+    ? "Click an RC or Pin ping — done"
+    : "✎ Edit start line";
+  document.body.classList.toggle("start-line-edit-mode", startLineEditMode);
+}
+editStartLineBtn.addEventListener("click", () => setStartLineEditMode(!startLineEditMode));
+function showEditStartLineBtnIfDayLoaded() {
+  const has = !!activeDayKey && (window.RACES?.[activeDayKey]?.length > 0);
+  editStartLineBtn.style.display = has ? "block" : "none";
 }
 
 // Pick the race for ladder display — unlike visibleRaceForMarks() this
@@ -3098,6 +3239,7 @@ function updateBoatsToRaceTime(t) {
   refreshStartCountdown();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap();
   renderStartLineSourcePicker();
+  renderCanonicalStartLine();
   renderLadderRungs();
   renderWindShadows();
   update3DBoats(raceTime);
@@ -3615,8 +3757,11 @@ async function selectDay(key) {
   // Drop any in-progress mark-edit mode and load this day's stored manual
   // marks before tracks render so renderRaceMarksOnMap sees them.
   setMarkEditMode(false);
+  setStartLineEditMode(false);
   loadManualMarksForDay(key);
+  loadCanonicalStartLinesForDay(key);
   showTopMarkBtnIfDayLoaded();
+  showEditStartLineBtnIfDayLoaded();
   renderDayList();
   renderWindForDay(key);
   renderWindBarb(key);
@@ -3695,10 +3840,18 @@ async function selectDay(key) {
 
   renderRaceTabs();
 
+  // Apply any admin-curated canonical start line OVER each track's own
+  // pings — done after addTrack but before any analyze/render that reads
+  // track.meta.startMarks (scoreboards, race-stats, ladder, etc).
+  for (const r of (window.RACES?.[key] || [])) {
+    if (canonicalStartLines.has(r.name)) applyCanonicalStartLineToTracks(r.name);
+  }
+
   // Compute marks per race using ALL boats' tracks combined, then render
   // them on the map. Marks persist while their race is visible.
   computeRaceMarksForDay();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
+  renderCanonicalStartLine();
 
   // Default the scoreboard to the first race of the day so opening a day
   // immediately shows results alongside the track(s).
