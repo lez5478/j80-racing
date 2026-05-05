@@ -961,14 +961,62 @@ let ladderRungsShown = localStorage.getItem(LS_LADDER) === "1";
 const ladderRungsLayer = L.layerGroup();
 if (ladderRungsShown) ladderRungsLayer.addTo(map);
 
-function startLineForRace(raceName) {
+// All distinct start-line candidates for a race — one per boat that has
+// pinged both an RC and a pin. Boats that pinged identical positions are
+// merged. Used by the "Start line from:" picker so the user can override
+// the auto-default when boats disagree.
+function startLineCandidates(raceName) {
+  const seen = new Map(); // key → { sm, boats: [boatName, …] }
   for (const tr of tracks) {
     if (tr.removed) continue;
     if (tr.meta?.race?.name !== raceName) continue;
     const sm = tr.meta?.startMarks;
-    if (sm?.rc && sm?.pin) return sm;
+    if (!sm?.rc || !sm?.pin) continue;
+    const key = `${sm.rc.lat.toFixed(5)},${sm.rc.lon.toFixed(5)}|${sm.pin.lat.toFixed(5)},${sm.pin.lon.toFixed(5)}`;
+    if (!seen.has(key)) seen.set(key, { sm, boats: [], key });
+    seen.get(key).boats.push(tr.meta?.boat || tr.name);
   }
-  return null;
+  return [...seen.values()];
+}
+function startLineKey(raceName) {
+  return `sailing.startLineKey.${activeDayKey}.${raceName}`;
+}
+function startLineForRace(raceName) {
+  const cands = startLineCandidates(raceName);
+  if (!cands.length) return null;
+  const chosen = localStorage.getItem(startLineKey(raceName));
+  if (chosen) {
+    const hit = cands.find((c) => c.key === chosen);
+    if (hit) return hit.sm;
+  }
+  // Default: the candidate most boats agree on.
+  cands.sort((a, b) => b.boats.length - a.boats.length);
+  return cands[0].sm;
+}
+function renderStartLineSourcePicker() {
+  const sel = document.getElementById("startLineSource");
+  const wrap = document.getElementById("startLineSourceWrap");
+  if (!sel || !wrap) return;
+  const raceName = ladderRaceName();
+  if (!raceName) { wrap.hidden = true; return; }
+  const cands = startLineCandidates(raceName);
+  if (cands.length < 2) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  cands.sort((a, b) => b.boats.length - a.boats.length);
+  const chosen = localStorage.getItem(startLineKey(raceName)) || cands[0].key;
+  sel.innerHTML = "";
+  for (const c of cands) {
+    const opt = document.createElement("option");
+    opt.value = c.key;
+    const boats = c.boats.length === 1 ? c.boats[0] : `${c.boats[0]} (+${c.boats.length - 1})`;
+    opt.textContent = `${boats}`;
+    if (c.key === chosen) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => {
+    localStorage.setItem(startLineKey(raceName), sel.value);
+    renderLadderRungs();
+  };
 }
 
 // Pick the race for ladder display — unlike visibleRaceForMarks() this
@@ -3049,6 +3097,7 @@ function updateBoatsToRaceTime(t) {
   tickGhosts();
   refreshStartCountdown();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap();
+  renderStartLineSourcePicker();
   renderLadderRungs();
   renderWindShadows();
   update3DBoats(raceTime);
