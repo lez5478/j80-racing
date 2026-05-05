@@ -445,27 +445,25 @@ function addTrack(name, points, meta = {}) {
   if (startMarks && (startMarks.rc || startMarks.pin)) {
     const RC_COLOR = "#facc15";    // yellow — Race Committee
     const PIN_COLOR = "#22c55e";   // green — Pin end
-    if (startMarks.rc) {
+    const rname = meta?.race?.name;
+    const boatName = meta?.boat || name;
+    if (startMarks.rc && !isPingHidden(rname, boatName, "RC", startMarks.rc.lat, startMarks.rc.lon)) {
       const rcMark = L.circleMarker([startMarks.rc.lat, startMarks.rc.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: RC_COLOR, fillOpacity: 1,
-      }).bindTooltip(`RC end · ${name} (click in edit mode to set as canonical)`);
+      }).bindTooltip(`RC end · ${name} (click in edit mode for actions)`);
       rcMark.on("click", () => {
-        if (!startLineEditMode) return;
-        const r = meta?.race?.name;
-        if (!r) return;
-        pickCanonicalEnd(r, "rc", { lat: startMarks.rc.lat, lng: startMarks.rc.lon });
+        if (!startLineEditMode || !rname) return;
+        openStartPingPopup(rcMark, rname, "RC", boatName, startMarks.rc.lat, startMarks.rc.lon);
       });
       layerChildren.push(rcMark);
     }
-    if (startMarks.pin) {
+    if (startMarks.pin && !isPingHidden(rname, boatName, "Pin", startMarks.pin.lat, startMarks.pin.lon)) {
       const pinMark = L.circleMarker([startMarks.pin.lat, startMarks.pin.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: PIN_COLOR, fillOpacity: 1,
-      }).bindTooltip(`Pin end · ${name} (click in edit mode to set as canonical)`);
+      }).bindTooltip(`Pin end · ${name} (click in edit mode for actions)`);
       pinMark.on("click", () => {
-        if (!startLineEditMode) return;
-        const r = meta?.race?.name;
-        if (!r) return;
-        pickCanonicalEnd(r, "pin", { lat: startMarks.pin.lat, lng: startMarks.pin.lon });
+        if (!startLineEditMode || !rname) return;
+        openStartPingPopup(pinMark, rname, "Pin", boatName, startMarks.pin.lat, startMarks.pin.lon);
       });
       layerChildren.push(pinMark);
     }
@@ -1113,6 +1111,79 @@ function renderCanonicalStartLine() {
   }
 }
 
+// Per-boat pings the admin has hidden as bogus, persisted in localStorage.
+const hiddenStartPings = new Map(); // raceName → Set("<boat>|<end>|<lat5>|<lon5>")
+function pingKey(boat, end, lat, lon) {
+  return `${boat || "?"}|${end}|${lat.toFixed(5)}|${lon.toFixed(5)}`;
+}
+function hiddenPingsLSKey(raceName) {
+  return `sailing.hiddenStartPings.${activeDayKey}.${raceName}`;
+}
+function loadHiddenStartPingsForDay(dateKey) {
+  hiddenStartPings.clear();
+  if (!dateKey || !window.RACES?.[dateKey]) return;
+  for (const r of window.RACES[dateKey]) {
+    try {
+      const raw = localStorage.getItem(`sailing.hiddenStartPings.${dateKey}.${r.name}`);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) hiddenStartPings.set(r.name, new Set(arr));
+      }
+    } catch { /* corrupt entry */ }
+  }
+}
+function saveHiddenStartPings(raceName) {
+  const set = hiddenStartPings.get(raceName);
+  const key = hiddenPingsLSKey(raceName);
+  if (set && set.size) localStorage.setItem(key, JSON.stringify([...set]));
+  else localStorage.removeItem(key);
+}
+function isPingHidden(raceName, boat, end, lat, lon) {
+  const set = hiddenStartPings.get(raceName);
+  return !!set?.has(pingKey(boat, end, lat, lon));
+}
+function hidePing(raceName, boat, end, lat, lon) {
+  if (!hiddenStartPings.has(raceName)) hiddenStartPings.set(raceName, new Set());
+  hiddenStartPings.get(raceName).add(pingKey(boat, end, lat, lon));
+  saveHiddenStartPings(raceName);
+}
+function unhideAllPings(raceName) {
+  hiddenStartPings.delete(raceName);
+  saveHiddenStartPings(raceName);
+}
+
+// Build the small DOM popup that opens when an admin clicks a ping in
+// start-line edit mode. Three actions: keep as RC, keep as Pin, hide.
+function openStartPingPopup(marker, raceName, originalEnd, boat, lat, lon) {
+  const div = document.createElement("div");
+  div.style.cssText = "font-size:12px; min-width:170px;";
+  div.innerHTML = `
+    <div style="margin-bottom:6px;color:#0f1924;">
+      <b>${originalEnd} ping</b> from ${boat || "?"}
+    </div>
+    <button class="rs-btn" data-act="rc" style="display:block;width:100%;margin-bottom:4px;">Set as canonical RC</button>
+    <button class="rs-btn" data-act="pin" style="display:block;width:100%;margin-bottom:4px;">Set as canonical Pin</button>
+    <button class="rs-btn" data-act="hide" style="display:block;width:100%;background:#7a2a2a;">Hide this ping</button>
+  `;
+  const popup = L.popup({ closeButton: true, autoClose: true })
+    .setLatLng([lat, lon])
+    .setContent(div)
+    .openOn(map);
+  div.querySelector("[data-act='rc']").onclick = () => {
+    pickCanonicalEnd(raceName, "rc", { lat, lng: lon });
+    map.closePopup(popup);
+  };
+  div.querySelector("[data-act='pin']").onclick = () => {
+    pickCanonicalEnd(raceName, "pin", { lat, lng: lon });
+    map.closePopup(popup);
+  };
+  div.querySelector("[data-act='hide']").onclick = () => {
+    hidePing(raceName, boat, originalEnd, lat, lon);
+    if (marker.remove) marker.remove();
+    map.closePopup(popup);
+  };
+}
+
 // Hook this into addTrack: when in edit mode, clicking any boat's RC or
 // pin ping designates it as the canonical RC/pin for that race.
 function pickCanonicalEnd(raceName, end /* "rc" | "pin" */, latlng) {
@@ -1148,7 +1219,10 @@ editStartLineBtn.style.cssText =
 // file and the temporal dead zone would throw if we touched it now.
 {
   const _rt = document.getElementById("raceTabs");
-  if (_rt && _rt.parentNode) _rt.parentNode.insertBefore(editStartLineBtn, _rt);
+  if (_rt && _rt.parentNode) {
+    _rt.parentNode.insertBefore(editStartLineBtn, _rt);
+    _rt.parentNode.insertBefore(restoreHiddenBtn, _rt);
+  }
 }
 
 function setStartLineEditMode(on) {
@@ -1158,7 +1232,26 @@ function setStartLineEditMode(on) {
     ? "Click an RC or Pin ping — done"
     : "✎ Edit start line";
   document.body.classList.toggle("start-line-edit-mode", startLineEditMode);
+  // Show/hide the "Restore hidden pings" button alongside.
+  const r = ladderRaceName();
+  const hidden = r ? hiddenStartPings.get(r)?.size || 0 : 0;
+  restoreHiddenBtn.style.display = startLineEditMode && hidden ? "block" : "none";
+  restoreHiddenBtn.textContent = `↺ Restore ${hidden} hidden ping${hidden > 1 ? "s" : ""} (${r || ""})`;
 }
+const restoreHiddenBtn = document.createElement("button");
+restoreHiddenBtn.className = "rs-btn";
+restoreHiddenBtn.type = "button";
+restoreHiddenBtn.style.cssText =
+  "display:none;width:100%;margin:0 0 6px;padding:6px;font-size:11px;background:#3a4a60;";
+restoreHiddenBtn.addEventListener("click", () => {
+  const r = ladderRaceName();
+  if (!r) return;
+  unhideAllPings(r);
+  // Reload the day to redraw all pings (cheapest reliable way).
+  const cur = activeDayKey;
+  activeDayKey = null;
+  selectDay(cur);
+});
 editStartLineBtn.addEventListener("click", () => setStartLineEditMode(!startLineEditMode));
 function showEditStartLineBtnIfDayLoaded() {
   const has = !!activeDayKey && (window.RACES?.[activeDayKey]?.length > 0);
@@ -3765,6 +3858,7 @@ async function selectDay(key) {
   setStartLineEditMode(false);
   loadManualMarksForDay(key);
   loadCanonicalStartLinesForDay(key);
+  loadHiddenStartPingsForDay(key);
   showTopMarkBtnIfDayLoaded();
   showEditStartLineBtnIfDayLoaded();
   renderDayList();
