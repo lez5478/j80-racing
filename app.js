@@ -1143,8 +1143,13 @@ editStartLineBtn.type = "button";
 editStartLineBtn.textContent = "✎ Edit start line";
 editStartLineBtn.style.cssText =
   "display:none;width:100%;margin:0 0 4px;padding:8px;font-size:12px;";
-// Insert after the manual-marks button (which sits above raceTabs).
-raceTabsEl.parentNode.insertBefore(editStartLineBtn, raceTabsEl);
+// Insert just above the race tabs. Use document.getElementById here,
+// not the raceTabsEl const — that const is declared further down the
+// file and the temporal dead zone would throw if we touched it now.
+{
+  const _rt = document.getElementById("raceTabs");
+  if (_rt && _rt.parentNode) _rt.parentNode.insertBefore(editStartLineBtn, _rt);
+}
 
 function setStartLineEditMode(on) {
   startLineEditMode = !!on;
