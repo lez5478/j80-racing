@@ -3346,12 +3346,19 @@ function updateBoatsToRaceTime(t) {
 }
 
 // Animation loop — advances raceTime by dt * speedMult while playing.
+// Wrapped in a try/catch so a single bad render can't kill the loop and
+// freeze the boats; the error is logged once for debugging.
+let _tickErrLogged = false;
 function tick(nowMs) {
-  if (playing && raceStart != null) {
-    const dt = (nowMs - lastFrameMs) / 1000;
-    let next = raceTime + dt * speedMult;
-    if (next >= raceEnd) { next = raceEnd; playing = false; playBtn.textContent = "▶"; }
-    updateBoatsToRaceTime(next);
+  try {
+    if (playing && raceStart != null) {
+      const dt = (nowMs - lastFrameMs) / 1000;
+      let next = raceTime + dt * speedMult;
+      if (next >= raceEnd) { next = raceEnd; playing = false; playBtn.textContent = "▶"; }
+      updateBoatsToRaceTime(next);
+    }
+  } catch (e) {
+    if (!_tickErrLogged) { console.error("tick error:", e); _tickErrLogged = true; }
   }
   lastFrameMs = nowMs;
   requestAnimationFrame(tick);
