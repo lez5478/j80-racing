@@ -1089,39 +1089,53 @@ function applyCanonicalStartLineToTracks(raceName) {
   }
 }
 const canonicalStartLineLayer = L.layerGroup().addTo(map);
+// Which races are visible right now (active race tab, or every race when
+// "All" is selected and the race has at least one un-hidden track).
+function isRaceVisibleNow(raceName) {
+  if (activeRaceFilter) return activeRaceFilter === raceName;
+  for (const t of tracks) {
+    if (t.removed || !t.visible) continue;
+    if (t.meta?.race?.name === raceName) return true;
+  }
+  return false;
+}
 function renderCanonicalStartLine() {
   canonicalStartLineLayer.clearLayers();
-  const raceName = ladderRaceName();
-  if (!raceName) return;
-  const obj = canonicalStartLines.get(raceName);
-  if (!obj?.rc || !obj?.pin) return;
-  // Bright cyan line so it stands out from the per-boat dashed lines.
-  L.polyline([
-    [obj.rc.lat, obj.rc.lon],
-    [obj.pin.lat, obj.pin.lon],
-  ], {
-    color: "#22d3ee", weight: 3, opacity: 0.95, dashArray: "8 4",
-  }).bindTooltip(`Canonical start line · ${raceName}`).addTo(canonicalStartLineLayer);
-  // Highlight chosen endpoints.
-  for (const [end, ll] of [["RC", obj.rc], ["Pin", obj.pin]]) {
-    L.circleMarker([ll.lat, ll.lon], {
-      radius: 8, weight: 3, color: "#22d3ee", fillColor: "#0e1a2b", fillOpacity: 0.4,
-    }).bindTooltip(`Canonical ${end} · click to remove`)
-      .on("click", () => {
-        if (!confirm(`Remove canonical ${end} for ${raceName}?`)) return;
-        const cur = canonicalStartLines.get(raceName);
-        if (!cur) return;
-        if (end === "RC") delete cur.rc; else delete cur.pin;
-        if (!cur.rc && !cur.pin) canonicalStartLines.delete(raceName);
-        else canonicalStartLines.set(raceName, cur);
-        saveCanonicalStartLine(raceName);
-        if (cur.rc && cur.pin) applyCanonicalStartLineToTracks(raceName);
-        applyPerBoatStartVisibility(raceName);
-        renderCanonicalStartLine();
-        renderLadderRungs();
-        if (selectedTrackId != null) selectTrack(selectedTrackId);
-      })
-      .addTo(canonicalStartLineLayer);
+  if (!canonicalStartLines.size) return;
+  for (const [raceName, obj] of canonicalStartLines) {
+    if (!isRaceVisibleNow(raceName)) continue;
+    if (!obj?.rc && !obj?.pin) continue;
+    // Bright cyan line so it stands out from the per-boat dashed lines.
+    if (obj.rc && obj.pin) {
+      L.polyline([
+        [obj.rc.lat, obj.rc.lon],
+        [obj.pin.lat, obj.pin.lon],
+      ], {
+        color: "#22d3ee", weight: 3, opacity: 0.95, dashArray: "8 4",
+      }).bindTooltip(`Canonical start line · ${raceName}`).addTo(canonicalStartLineLayer);
+    }
+    // Highlight chosen endpoints.
+    for (const [end, ll] of [["RC", obj.rc], ["Pin", obj.pin]]) {
+      if (!ll) continue;
+      L.circleMarker([ll.lat, ll.lon], {
+        radius: 8, weight: 3, color: "#22d3ee", fillColor: "#0e1a2b", fillOpacity: 0.4,
+      }).bindTooltip(`Canonical ${end} · ${raceName} · click to remove`)
+        .on("click", () => {
+          if (!confirm(`Remove canonical ${end} for ${raceName}?`)) return;
+          const cur = canonicalStartLines.get(raceName);
+          if (!cur) return;
+          if (end === "RC") delete cur.rc; else delete cur.pin;
+          if (!cur.rc && !cur.pin) canonicalStartLines.delete(raceName);
+          else canonicalStartLines.set(raceName, cur);
+          saveCanonicalStartLine(raceName);
+          if (cur && cur.rc && cur.pin) applyCanonicalStartLineToTracks(raceName);
+          applyPerBoatStartVisibility(raceName);
+          renderCanonicalStartLine();
+          renderLadderRungs();
+          if (selectedTrackId != null) selectTrack(selectedTrackId);
+        })
+        .addTo(canonicalStartLineLayer);
+    }
   }
 }
 
