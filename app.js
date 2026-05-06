@@ -4703,6 +4703,9 @@ function clearTracks() {
   markRoundingsLayer.clearLayers();
   raceFinishLineLayer.clearLayers();
   laylinesLayer.clearLayers();
+  windShadowLayer.clearLayers();
+  canonicalStartLineLayer.clearLayers();
+  ladderRungsLayer.clearLayers();
   lastRenderedMarksRace = null;
   lastRenderedFinishRace = null;
   renderTrackLegend();
