@@ -1596,6 +1596,7 @@ function renderTrackLegend() {
       }
       updateRaceClockBounds();
       renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
+      renderWindShadows();
       renderTrackLegend();
     });
   }
@@ -1641,6 +1642,11 @@ function applyRaceFilter() {
   }
   renderTrackLegend();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap(); refresh3DScene();
+  // Wind shadows are only refreshed each play-tick; clear stale shadows
+  // belonging to boats hidden by the filter while the clock was paused.
+  renderWindShadows();
+  renderCanonicalStartLine();
+  renderLadderRungs();
 }
 
 function renderRaceTabs() {
