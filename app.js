@@ -451,6 +451,7 @@ function addTrack(name, points, meta = {}) {
       const rcMark = L.circleMarker([startMarks.rc.lat, startMarks.rc.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: RC_COLOR, fillOpacity: 1,
       }).bindTooltip(`RC end · ${name} (click in edit mode for actions)`);
+      registerPerBoatStartGraphic(rname, rcMark, "ping");
       rcMark.on("click", (ev) => {
         if (window.__startLineDebug) console.log("RC click", { startLineEditMode, rname });
         if (!startLineEditMode || !rname) return;
@@ -466,6 +467,7 @@ function addTrack(name, points, meta = {}) {
       const pinMark = L.circleMarker([startMarks.pin.lat, startMarks.pin.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: PIN_COLOR, fillOpacity: 1,
       }).bindTooltip(`Pin end · ${name} (click in edit mode for actions)`);
+      registerPerBoatStartGraphic(rname, pinMark, "ping");
       pinMark.on("click", (ev) => {
         if (window.__startLineDebug) console.log("Pin click", { startLineEditMode, rname });
         if (!startLineEditMode || !rname) return;
@@ -483,6 +485,7 @@ function addTrack(name, points, meta = {}) {
         [startMarks.pin.lat, startMarks.pin.lon],
       ], { color: "#fff", weight: 2.5, opacity: 0.9, dashArray: "6 4" })
         .bindTooltip(`Start line · ${name}`);
+      registerPerBoatStartGraphic(rname, startLine, "line");
       layerChildren.push(startLine);
     }
   }
@@ -1113,11 +1116,40 @@ function renderCanonicalStartLine() {
         else canonicalStartLines.set(raceName, cur);
         saveCanonicalStartLine(raceName);
         if (cur.rc && cur.pin) applyCanonicalStartLineToTracks(raceName);
+        applyPerBoatStartVisibility(raceName);
         renderCanonicalStartLine();
         renderLadderRungs();
         if (selectedTrackId != null) selectTrack(selectedTrackId);
       })
       .addTo(canonicalStartLineLayer);
+  }
+}
+
+// Track every per-boat start-line graphic (RC ping, pin ping, dashed line)
+// per race so we can mass-hide them once a canonical line is set, and
+// bring them back if the admin clears the canonical.
+const perBoatStartGraphics = new Map(); // raceName → [{layer, kind}]
+function registerPerBoatStartGraphic(raceName, layer, kind) {
+  if (!raceName) return;
+  if (!perBoatStartGraphics.has(raceName)) perBoatStartGraphics.set(raceName, []);
+  perBoatStartGraphics.get(raceName).push({ layer, kind });
+}
+function applyPerBoatStartVisibility(raceName) {
+  const arr = perBoatStartGraphics.get(raceName);
+  if (!arr) return;
+  const canon = canonicalStartLines.get(raceName);
+  const hideAll = !!(canon?.rc && canon?.pin);
+  for (const { layer, kind } of arr) {
+    if (!layer.setStyle) continue;
+    if (hideAll) {
+      layer.setStyle({ opacity: 0, fillOpacity: 0 });
+      if (layer.options) layer.options.interactive = false;
+    } else {
+      // Restore based on kind — same values addTrack used originally.
+      if (kind === "ping") layer.setStyle({ opacity: 1, fillOpacity: 1 });
+      else if (kind === "line") layer.setStyle({ opacity: 0.9 });
+      if (layer.options) layer.options.interactive = true;
+    }
   }
 }
 
@@ -1213,6 +1245,7 @@ function pickCanonicalEnd(raceName, end /* "rc" | "pin" */, latlng) {
       if (t?.meta?.race?.name === raceName) selectTrack(selectedTrackId);
     }
   }
+  applyPerBoatStartVisibility(raceName);
   renderCanonicalStartLine();
   renderLadderRungs();
 }
@@ -3983,9 +4016,12 @@ async function selectDay(key) {
 
   // Apply any admin-curated canonical start line OVER each track's own
   // pings — done after addTrack but before any analyze/render that reads
-  // track.meta.startMarks (scoreboards, race-stats, ladder, etc).
+  // track.meta.startMarks (scoreboards, race-stats, ladder, etc). Also
+  // hide every per-boat ping/line for races that have a canonical, so
+  // the map only shows the agreed line.
   for (const r of (window.RACES?.[key] || [])) {
     if (canonicalStartLines.has(r.name)) applyCanonicalStartLineToTracks(r.name);
+    applyPerBoatStartVisibility(r.name);
   }
 
   // Compute marks per race using ALL boats' tracks combined, then render
@@ -4725,6 +4761,7 @@ function clearTracks() {
   windShadowLayer.clearLayers();
   canonicalStartLineLayer.clearLayers();
   ladderRungsLayer.clearLayers();
+  perBoatStartGraphics.clear();
   lastRenderedMarksRace = null;
   lastRenderedFinishRace = null;
   renderTrackLegend();
