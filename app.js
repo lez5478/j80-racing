@@ -3336,10 +3336,29 @@ function updateBoatsToRaceTime(t) {
       const mid = (lo + hi) >> 1;
       if (pts[mid].t <= clamped) lo = mid; else hi = mid;
     }
-    // tr.latlngs[i] corresponds to pts[i]; include up to lo and append the
-    // interpolated boat position so the trail tip touches the moving icon.
-    const trail = tr.latlngs.slice(0, lo + 1);
-    trail.push([s.lat, s.lon]);
+    // Trim the trail to the last 2 minutes BEFORE the gun onwards. Pre-start
+    // wandering creates noise that hides the actual race tactics, so we
+    // start the dashed line at race-start − 120 s. The boat icon itself is
+    // still rendered before that window.
+    const rstartSec = tr.meta?.race?.start ? Date.parse(tr.meta.race.start) / 1000 : null;
+    const trailStart = rstartSec != null ? rstartSec - 120 : -Infinity;
+    let lower = 0;
+    if (trailStart > -Infinity) {
+      let llo = 0, lhi = pts.length - 1;
+      while (llo + 1 < lhi) {
+        const mid = (llo + lhi) >> 1;
+        if (pts[mid].t < trailStart) llo = mid; else lhi = mid;
+      }
+      lower = pts[llo].t < trailStart ? lhi : llo;
+    }
+    // Show the trail only once we're inside the 2-minute pre-start window.
+    let trail;
+    if (clamped < trailStart) {
+      trail = []; // hide trail entirely; boat icon still appears at s
+    } else {
+      trail = tr.latlngs.slice(lower, lo + 1);
+      trail.push([s.lat, s.lon]);
+    }
     tr.line.setLatLngs(trail);
     // If the boat's popup is open, keep its readout in sync with the clock.
     if (tr.boat.isPopupOpen()) tr.boat.setPopupContent(boatPopupHtml(tr, s));
