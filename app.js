@@ -451,8 +451,13 @@ function addTrack(name, points, meta = {}) {
       const rcMark = L.circleMarker([startMarks.rc.lat, startMarks.rc.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: RC_COLOR, fillOpacity: 1,
       }).bindTooltip(`RC end · ${name} (click in edit mode for actions)`);
-      rcMark.on("click", () => {
+      rcMark.on("click", (ev) => {
+        if (window.__startLineDebug) console.log("RC click", { startLineEditMode, rname });
         if (!startLineEditMode || !rname) return;
+        if (ev?.originalEvent) {
+          ev.originalEvent.preventDefault?.();
+          L.DomEvent.stopPropagation?.(ev.originalEvent);
+        }
         openStartPingPopup(rcMark, rname, "RC", boatName, startMarks.rc.lat, startMarks.rc.lon);
       });
       layerChildren.push(rcMark);
@@ -461,8 +466,13 @@ function addTrack(name, points, meta = {}) {
       const pinMark = L.circleMarker([startMarks.pin.lat, startMarks.pin.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: PIN_COLOR, fillOpacity: 1,
       }).bindTooltip(`Pin end · ${name} (click in edit mode for actions)`);
-      pinMark.on("click", () => {
+      pinMark.on("click", (ev) => {
+        if (window.__startLineDebug) console.log("Pin click", { startLineEditMode, rname });
         if (!startLineEditMode || !rname) return;
+        if (ev?.originalEvent) {
+          ev.originalEvent.preventDefault?.();
+          L.DomEvent.stopPropagation?.(ev.originalEvent);
+        }
         openStartPingPopup(pinMark, rname, "Pin", boatName, startMarks.pin.lat, startMarks.pin.lon);
       });
       layerChildren.push(pinMark);
@@ -1154,34 +1164,34 @@ function unhideAllPings(raceName) {
 
 // Build the small DOM popup that opens when an admin clicks a ping in
 // start-line edit mode. Three actions: keep as RC, keep as Pin, hide.
+// Uses a fresh popup each call (no autoClose chain).
 function openStartPingPopup(marker, raceName, originalEnd, boat, lat, lon) {
-  const div = document.createElement("div");
-  div.style.cssText = "font-size:12px; min-width:170px;";
-  div.innerHTML = `
-    <div style="margin-bottom:6px;color:#0f1924;">
-      <b>${originalEnd} ping</b> from ${boat || "?"}
-    </div>
-    <button class="rs-btn" data-act="rc" style="display:block;width:100%;margin-bottom:4px;">Set as canonical RC</button>
-    <button class="rs-btn" data-act="pin" style="display:block;width:100%;margin-bottom:4px;">Set as canonical Pin</button>
-    <button class="rs-btn" data-act="hide" style="display:block;width:100%;background:#7a2a2a;">Hide this ping</button>
-  `;
-  const popup = L.popup({ closeButton: true, autoClose: true })
+  if (window.__startLineDebug) console.log("ping popup open", { raceName, originalEnd, boat, lat, lon });
+  const html = `
+    <div style="font-size:12px;min-width:180px;color:#0f1924;">
+      <div style="margin-bottom:6px"><b>${originalEnd} ping</b> from ${boat || "?"}</div>
+      <button id="_spp_rc" style="display:block;width:100%;margin-bottom:4px;padding:5px;cursor:pointer;background:#1c3653;color:#fff;border:0;border-radius:4px;">Set as canonical RC</button>
+      <button id="_spp_pin" style="display:block;width:100%;margin-bottom:4px;padding:5px;cursor:pointer;background:#1c3653;color:#fff;border:0;border-radius:4px;">Set as canonical Pin</button>
+      <button id="_spp_hide" style="display:block;width:100%;padding:5px;cursor:pointer;background:#7a2a2a;color:#fff;border:0;border-radius:4px;">Hide this ping</button>
+    </div>`;
+  const popup = L.popup({ closeButton: true, autoClose: false, closeOnClick: false })
     .setLatLng([lat, lon])
-    .setContent(div)
+    .setContent(html)
     .openOn(map);
-  div.querySelector("[data-act='rc']").onclick = () => {
-    pickCanonicalEnd(raceName, "rc", { lat, lng: lon });
-    map.closePopup(popup);
-  };
-  div.querySelector("[data-act='pin']").onclick = () => {
-    pickCanonicalEnd(raceName, "pin", { lat, lng: lon });
-    map.closePopup(popup);
-  };
-  div.querySelector("[data-act='hide']").onclick = () => {
-    hidePing(raceName, boat, originalEnd, lat, lon);
-    if (marker.remove) marker.remove();
-    map.closePopup(popup);
-  };
+  // Wait one tick for Leaflet to inject the HTML into the DOM, then wire.
+  setTimeout(() => {
+    const rcB = document.getElementById("_spp_rc");
+    const pinB = document.getElementById("_spp_pin");
+    const hideB = document.getElementById("_spp_hide");
+    if (window.__startLineDebug) console.log("ping popup buttons", !!rcB, !!pinB, !!hideB);
+    if (rcB) rcB.onclick = () => { pickCanonicalEnd(raceName, "rc", { lat, lng: lon }); map.closePopup(popup); };
+    if (pinB) pinB.onclick = () => { pickCanonicalEnd(raceName, "pin", { lat, lng: lon }); map.closePopup(popup); };
+    if (hideB) hideB.onclick = () => {
+      hidePing(raceName, boat, originalEnd, lat, lon);
+      if (marker.remove) marker.remove();
+      map.closePopup(popup);
+    };
+  }, 0);
 }
 
 // Hook this into addTrack: when in edit mode, clicking any boat's RC or
