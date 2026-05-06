@@ -1214,9 +1214,24 @@ editStartLineBtn.type = "button";
 editStartLineBtn.textContent = "✎ Edit start line";
 editStartLineBtn.style.cssText =
   "display:none;width:100%;margin:0 0 4px;padding:8px;font-size:12px;";
-// Insert just above the race tabs. Use document.getElementById here,
-// not the raceTabsEl const — that const is declared further down the
-// file and the temporal dead zone would throw if we touched it now.
+
+const restoreHiddenBtn = document.createElement("button");
+restoreHiddenBtn.className = "rs-btn";
+restoreHiddenBtn.type = "button";
+restoreHiddenBtn.style.cssText =
+  "display:none;width:100%;margin:0 0 6px;padding:6px;font-size:11px;background:#3a4a60;";
+restoreHiddenBtn.addEventListener("click", () => {
+  const r = ladderRaceName();
+  if (!r) return;
+  unhideAllPings(r);
+  const cur = activeDayKey;
+  activeDayKey = null;
+  selectDay(cur);
+});
+
+// Insert both buttons just above the race tabs. Use document.getElementById,
+// not the raceTabsEl const — that const is declared further down the file
+// and the temporal dead zone would throw if we touched it now.
 {
   const _rt = document.getElementById("raceTabs");
   if (_rt && _rt.parentNode) {
@@ -1232,26 +1247,11 @@ function setStartLineEditMode(on) {
     ? "Click an RC or Pin ping — done"
     : "✎ Edit start line";
   document.body.classList.toggle("start-line-edit-mode", startLineEditMode);
-  // Show/hide the "Restore hidden pings" button alongside.
   const r = ladderRaceName();
   const hidden = r ? hiddenStartPings.get(r)?.size || 0 : 0;
   restoreHiddenBtn.style.display = startLineEditMode && hidden ? "block" : "none";
   restoreHiddenBtn.textContent = `↺ Restore ${hidden} hidden ping${hidden > 1 ? "s" : ""} (${r || ""})`;
 }
-const restoreHiddenBtn = document.createElement("button");
-restoreHiddenBtn.className = "rs-btn";
-restoreHiddenBtn.type = "button";
-restoreHiddenBtn.style.cssText =
-  "display:none;width:100%;margin:0 0 6px;padding:6px;font-size:11px;background:#3a4a60;";
-restoreHiddenBtn.addEventListener("click", () => {
-  const r = ladderRaceName();
-  if (!r) return;
-  unhideAllPings(r);
-  // Reload the day to redraw all pings (cheapest reliable way).
-  const cur = activeDayKey;
-  activeDayKey = null;
-  selectDay(cur);
-});
 editStartLineBtn.addEventListener("click", () => setStartLineEditMode(!startLineEditMode));
 function showEditStartLineBtnIfDayLoaded() {
   const has = !!activeDayKey && (window.RACES?.[activeDayKey]?.length > 0);
