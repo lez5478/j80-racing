@@ -1150,9 +1150,16 @@ function registerPerBoatStartGraphic(raceName, layer, kind) {
 }
 function applyPerBoatStartVisibility(raceName) {
   const arr = perBoatStartGraphics.get(raceName);
-  if (!arr) return;
   const canon = canonicalStartLines.get(raceName);
   const hideAll = !!(canon?.rc && canon?.pin);
+  if (window.__startLineDebug) {
+    console.log("applyPerBoatStartVisibility", raceName,
+      "hideAll=", hideAll,
+      "registered=", arr?.length ?? 0,
+      "registeredKeys=", [...perBoatStartGraphics.keys()],
+      "canonicalKeys=", [...canonicalStartLines.keys()]);
+  }
+  if (!arr) return;
   for (const { layer, kind } of arr) {
     if (!layer.setStyle) continue;
     if (hideAll) {
