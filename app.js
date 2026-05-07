@@ -671,7 +671,19 @@ function updateWindMap() {
 // keeps the result finite right on top of a station.
 
 const windGridLayer = L.layerGroup().addTo(map);
-let windGridShown = true;
+// Defaults: particle animation on, wind-arrow grid off. If the device
+// can't do canvas 2D (so particles wouldn't render) OR the user has
+// requested reduced motion, fall back to the arrow grid instead.
+const _canvasOk = (() => {
+  try {
+    const c = document.createElement("canvas");
+    return !!(c.getContext && c.getContext("2d"));
+  } catch { return false; }
+})();
+const _prefersReducedMotion = typeof window.matchMedia === "function"
+  && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const _particlesAvailable = _canvasOk && !_prefersReducedMotion;
+let windGridShown = !_particlesAvailable;
 const IDW_POWER = 2;
 
 // Convert one station reading into a wind-going-TO vector (u east, v north).
@@ -888,11 +900,12 @@ const WindParticleLayer = L.Layer.extend({
 });
 
 const windParticles = new WindParticleLayer();
-let windParticlesShown = true;
-windParticles.addTo(map);
+let windParticlesShown = _particlesAvailable;
+if (windParticlesShown) windParticles.addTo(map);
 
 const windGridToggle = document.getElementById("windGridToggle");
 if (windGridToggle) {
+  windGridToggle.checked = windGridShown;
   windGridToggle.addEventListener("change", () => {
     windGridShown = windGridToggle.checked;
     renderWindGrid();
@@ -901,6 +914,13 @@ if (windGridToggle) {
 
 const windParticleToggle = document.getElementById("windParticleToggle");
 if (windParticleToggle) {
+  windParticleToggle.checked = windParticlesShown;
+  // If the platform can't run particles, disable the toggle so the user
+  // doesn't think it's just turned off.
+  if (!_particlesAvailable) {
+    windParticleToggle.disabled = true;
+    windParticleToggle.title = "Particles unavailable on this device — using arrow grid";
+  }
   windParticleToggle.addEventListener("change", () => {
     windParticlesShown = windParticleToggle.checked;
     if (windParticlesShown) windParticles.addTo(map);
