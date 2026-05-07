@@ -1056,16 +1056,29 @@ function canonStartLineKey(raceName) {
 function loadCanonicalStartLinesForDay(dateKey) {
   canonicalStartLines.clear();
   if (!dateKey || !window.RACES?.[dateKey]) return;
+  const validLL = (p) =>
+    p && Number.isFinite(p.lat) && Number.isFinite(p.lon)
+      && p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180;
   for (const r of window.RACES[dateKey]) {
+    const k = `sailing.canonStartLine.${dateKey}.${r.name}`;
     try {
-      const raw = localStorage.getItem(`sailing.canonStartLine.${dateKey}.${r.name}`);
-      if (raw) {
-        const obj = JSON.parse(raw);
-        if (obj?.rc?.lat != null && obj?.pin?.lat != null) {
-          canonicalStartLines.set(r.name, obj);
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const obj = JSON.parse(raw);
+      // Strip any endpoint with bad coords (was a bug earlier — lon: undefined).
+      const clean = { ts: obj?.ts || Date.now() };
+      if (validLL(obj?.rc)) clean.rc = { lat: obj.rc.lat, lon: obj.rc.lon };
+      if (validLL(obj?.pin)) clean.pin = { lat: obj.pin.lat, lon: obj.pin.lon };
+      if (clean.rc || clean.pin) {
+        canonicalStartLines.set(r.name, clean);
+        // Rewrite to localStorage if we threw something out.
+        if (!validLL(obj?.rc) || !validLL(obj?.pin)) {
+          localStorage.setItem(k, JSON.stringify(clean));
         }
+      } else {
+        localStorage.removeItem(k);
       }
-    } catch { /* corrupt entry */ }
+    } catch { localStorage.removeItem(k); }
   }
 }
 function saveCanonicalStartLine(raceName) {
@@ -1261,8 +1274,15 @@ function openStartPingPopup(marker, raceName, originalEnd, boat, lat, lon) {
 // pin ping designates it as the canonical RC/pin for that race.
 function pickCanonicalEnd(raceName, end /* "rc" | "pin" */, latlng) {
   if (!raceName) return;
+  // Accept either Leaflet's {lat,lng} or our local {lat,lon}.
+  const lat = Number(latlng.lat);
+  const lon = Number(latlng.lon ?? latlng.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+    console.warn("pickCanonicalEnd: bad coords", latlng);
+    return;
+  }
   const cur = canonicalStartLines.get(raceName) || {};
-  cur[end] = { lat: latlng.lat, lon: latlng.lon };
+  cur[end] = { lat, lon };
   cur.ts = Date.now();
   canonicalStartLines.set(raceName, cur);
   saveCanonicalStartLine(raceName);
