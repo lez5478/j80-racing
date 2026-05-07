@@ -490,6 +490,25 @@ function addTrack(name, points, meta = {}) {
     }
   }
 
+  // Detect data gaps (>5 s between consecutive fixes) so the user can see
+  // where GPS dropouts happened. Each gap stores its bounding times +
+  // endpoints; renders as a thin red dashed line between the two fixes
+  // and lets updateBoatsToRaceTime mark the boat icon as "in-gap" while
+  // the playback clock is inside one.
+  const gaps = [];
+  for (let i = 1; i < points.length; i++) {
+    const dt = points[i].t - points[i - 1].t;
+    if (dt > 5) {
+      const a = points[i - 1], b = points[i];
+      const segment = L.polyline(
+        [[a.lat, a.lon], [b.lat, b.lon]],
+        { color: "#ef4444", weight: 1.5, opacity: 0.85, dashArray: "2 5", interactive: false },
+      );
+      layerChildren.push(segment);
+      gaps.push({ t0: a.t, t1: b.t, durSec: dt });
+    }
+  }
+
   const layer = L.layerGroup(layerChildren).addTo(map);
 
   const id = tracks.length;
@@ -508,7 +527,7 @@ function addTrack(name, points, meta = {}) {
   }
   const track = {
     id, name, layer, line, points, color, visible: true,
-    latlngs, fullBounds, cumDist,
+    latlngs, fullBounds, cumDist, gaps,
     boat, maxSog,
     tStart: points[0].t, tEnd: points[points.length - 1].t,
     meta, // { race, boat, window } when set by selectDay
@@ -3507,9 +3526,21 @@ function updateBoatsToRaceTime(t) {
     tr.boat.setLatLng([s.lat, s.lon]);
     // Update rotations on the existing DOM nodes (avoids flicker from setIcon).
     const el = tr.boat.getElement();
+    // Are we inside a recorded data gap right now? If yes, the boat icon
+    // gets a small ⚠ badge and a "data-gap" class so the user can see
+    // the position is stale (interpolated from the last fix).
+    let inGap = false;
+    if (tr.gaps && tr.gaps.length) {
+      for (const g of tr.gaps) {
+        if (clamped > g.t0 && clamped < g.t1) { inGap = true; break; }
+      }
+    }
     if (el) {
       const inner = el.querySelector(".boat-icon");
-      if (inner) inner.style.transform = `rotate(${s.cog}deg)`;
+      if (inner) {
+        inner.style.transform = `rotate(${s.cog}deg)`;
+        inner.classList.toggle("data-gap", inGap);
+      }
       // Sail orientation: wind from starboard → sail on port (negative).
       const sail = el.querySelector(".boat-sail");
       if (sail) {

@@ -405,6 +405,20 @@ body.mark-edit-mode .leaflet-container,
 body.mark-edit-mode .leaflet-interactive { cursor: crosshair !important; }
 body.start-line-edit-mode .leaflet-container { cursor: pointer !important; }
 body.finish-line-edit-mode .leaflet-container { cursor: crosshair !important; }
+.boat-icon.data-gap { opacity: 0.55; }
+.boat-icon.data-gap::after {
+  content: "⚠";
+  position: absolute;
+  top: -8px; right: -8px;
+  font-size: 12px;
+  color: #fff;
+  background: #ef4444;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid #0f1924;
+  pointer-events: none;
+}
 .rs-btn.active { background: #2a6c41 !important; color: #fff; }
 .mark-icon.manual {
   background: #fef3c7;
