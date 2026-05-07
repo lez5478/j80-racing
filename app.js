@@ -1042,6 +1042,62 @@ function renderStartLineSourcePicker() {
   };
 }
 
+// ---------- Canonical (admin-curated) finish lines ----------
+// One end is always the canonical Race-Committee boat (taken from the
+// canonical START line). The other end defaults to the race's leeward
+// (L) mark for non-passage races; admin can override by clicking any
+// spot on the map while in finish-line-edit mode.
+const canonicalFinishLines = new Map(); // raceName → { other: {lat, lon} }
+let finishLineEditMode = false;
+
+function canonFinishLineKey(raceName) {
+  return `sailing.canonFinishLine.${activeDayKey}.${raceName}`;
+}
+function loadCanonicalFinishLinesForDay(dateKey) {
+  canonicalFinishLines.clear();
+  if (!dateKey || !window.RACES?.[dateKey]) return;
+  const validLL = (p) =>
+    p && Number.isFinite(p.lat) && Number.isFinite(p.lon)
+      && p.lat >= -90 && p.lat <= 90 && p.lon >= -180 && p.lon <= 180;
+  for (const r of window.RACES[dateKey]) {
+    const k = `sailing.canonFinishLine.${dateKey}.${r.name}`;
+    try {
+      const raw = localStorage.getItem(k);
+      if (!raw) continue;
+      const obj = JSON.parse(raw);
+      if (validLL(obj?.other)) canonicalFinishLines.set(r.name, { other: { ...obj.other } });
+      else localStorage.removeItem(k);
+    } catch { localStorage.removeItem(k); }
+  }
+}
+function saveCanonicalFinishLine(raceName) {
+  const obj = canonicalFinishLines.get(raceName);
+  const key = canonFinishLineKey(raceName);
+  if (obj?.other) localStorage.setItem(key, JSON.stringify(obj));
+  else localStorage.removeItem(key);
+}
+// Resolve the canonical RC (committee boat) for a race. Falls back to the
+// auto-detected finish-line RC if no canonical start line is set.
+function rcForFinish(raceName) {
+  const cs = canonicalStartLines.get(raceName);
+  if (cs?.rc) return { ...cs.rc };
+  const fl = raceFinishLines.get(raceName);
+  if (fl?.rc) return { ...fl.rc };
+  return null;
+}
+// Resolve the "other" finish-line end: manual override > leeward (L) mark
+// for the race > auto-detected pin from boat crossings.
+function otherForFinish(raceName) {
+  const manual = canonicalFinishLines.get(raceName)?.other;
+  if (manual) return { ...manual };
+  const marks = effectiveMarksFor(raceName);
+  const lee = marks.find((m) => m.label && m.label.toUpperCase().startsWith("L"));
+  if (lee) return { lat: lee.lat, lon: lee.lon };
+  const fl = raceFinishLines.get(raceName);
+  if (fl?.pin) return { ...fl.pin };
+  return null;
+}
+
 // ---------- Canonical (admin-curated) start lines ----------
 // Per (date, race) the user can keep one boat's RC ping and another
 // boat's pin ping, build the "real" start line, and re-run analysis
@@ -1323,14 +1379,31 @@ restoreHiddenBtn.addEventListener("click", () => {
   selectDay(cur);
 });
 
-// Insert both buttons just above the race tabs. Use document.getElementById,
-// not the raceTabsEl const — that const is declared further down the file
-// and the temporal dead zone would throw if we touched it now.
+const editFinishLineBtn = document.createElement("button");
+editFinishLineBtn.id = "editFinishLineBtn";
+editFinishLineBtn.className = "rs-btn";
+editFinishLineBtn.type = "button";
+editFinishLineBtn.textContent = "✎ Edit finish line";
+editFinishLineBtn.style.cssText =
+  "display:none;width:100%;margin:0 0 4px;padding:8px;font-size:12px;";
+
+function setFinishLineEditMode(on) {
+  finishLineEditMode = !!on;
+  editFinishLineBtn.classList.toggle("active", finishLineEditMode);
+  editFinishLineBtn.textContent = finishLineEditMode
+    ? "Click map for finish-line end — done"
+    : "✎ Edit finish line";
+  document.body.classList.toggle("finish-line-edit-mode", finishLineEditMode);
+}
+editFinishLineBtn.addEventListener("click", () => setFinishLineEditMode(!finishLineEditMode));
+
+// Insert all start/finish curation buttons just above the race tabs.
 {
   const _rt = document.getElementById("raceTabs");
   if (_rt && _rt.parentNode) {
     _rt.parentNode.insertBefore(editStartLineBtn, _rt);
     _rt.parentNode.insertBefore(restoreHiddenBtn, _rt);
+    _rt.parentNode.insertBefore(editFinishLineBtn, _rt);
   }
 }
 
@@ -3091,27 +3164,50 @@ const raceFinishLineLayer = L.layerGroup().addTo(map);
 let lastRenderedFinishRace = null;
 function renderFinishLineOnMap() {
   const activeRaceName = visibleRaceForMarks();
-  if (activeRaceName === lastRenderedFinishRace) return;
-  lastRenderedFinishRace = activeRaceName;
+  // Force re-draw whenever a manual override changes — caching by name
+  // alone would miss that case, so include the override key in the cache.
+  const overrideKey = canonicalFinishLines.get(activeRaceName)?.other;
+  const cacheKey = `${activeRaceName}|${overrideKey ? overrideKey.lat + "," + overrideKey.lon : "auto"}`;
+  if (cacheKey === lastRenderedFinishRace) return;
+  lastRenderedFinishRace = cacheKey;
   raceFinishLineLayer.clearLayers();
   if (!activeRaceName) return;
-  const fl = raceFinishLines.get(activeRaceName);
-  if (!fl) return;
-  L.polyline([[fl.rc.lat, fl.rc.lon], [fl.pin.lat, fl.pin.lon]], {
+  const rc = rcForFinish(activeRaceName);
+  const other = otherForFinish(activeRaceName);
+  const fl = raceFinishLines.get(activeRaceName); // for crossings annotation
+  if (!rc || !other) return;
+  const isManual = !!canonicalFinishLines.get(activeRaceName)?.other;
+  const tipSuffix = isManual
+    ? "manual override"
+    : (effectiveMarksFor(activeRaceName).find((m) => m.label?.toUpperCase().startsWith("L"))
+        ? "RC + leeward mark"
+        : (fl ? `inferred from ${fl.crossings.length} boat${fl.crossings.length > 1 ? "s" : ""}` : "auto"));
+  L.polyline([[rc.lat, rc.lon], [other.lat, other.lon]], {
     color: "#a78bfa", weight: 2.5, opacity: 0.95, dashArray: "8 4",
-  }).bindTooltip(`Finish line · ${activeRaceName} · inferred from ${fl.crossings.length} boat${fl.crossings.length > 1 ? "s" : ""}`)
+  }).bindTooltip(`Finish line · ${activeRaceName} · ${tipSuffix}`)
     .addTo(raceFinishLineLayer);
-  L.circleMarker([fl.pin.lat, fl.pin.lon], {
-    radius: 5, weight: 2, color: "#0f1924",
-    fillColor: "#a78bfa", fillOpacity: 1,
-  }).bindTooltip("Finish pin (inferred)")
+  L.circleMarker([other.lat, other.lon], {
+    radius: isManual ? 7 : 5, weight: 2,
+    color: isManual ? "#a78bfa" : "#0f1924",
+    fillColor: "#a78bfa", fillOpacity: isManual ? 0.5 : 1,
+  }).bindTooltip(isManual ? "Finish pin (manual · click to remove)" : "Finish pin")
+    .on("click", () => {
+      if (!isManual) return;
+      if (!confirm(`Clear manual finish-line end for ${activeRaceName}?`)) return;
+      canonicalFinishLines.delete(activeRaceName);
+      saveCanonicalFinishLine(activeRaceName);
+      lastRenderedFinishRace = null;
+      renderFinishLineOnMap();
+    })
     .addTo(raceFinishLineLayer);
-  for (const c of fl.crossings) {
-    L.circleMarker([c.lat, c.lon], {
-      radius: 3, weight: 1, color: "#0f1924",
-      fillColor: "#fde047", fillOpacity: 0.9,
-    }).bindTooltip(`P${c.place} · ${c.boat} crossed here`)
-      .addTo(raceFinishLineLayer);
+  if (fl?.crossings) {
+    for (const c of fl.crossings) {
+      L.circleMarker([c.lat, c.lon], {
+        radius: 3, weight: 1, color: "#0f1924",
+        fillColor: "#fde047", fillOpacity: 0.9,
+      }).bindTooltip(`P${c.place} · ${c.boat} crossed here`)
+        .addTo(raceFinishLineLayer);
+    }
   }
 }
 
@@ -3684,6 +3780,22 @@ function showTopMarkBtnIfDayLoaded() {
 editMarksBtn?.addEventListener("click", () => setMarkEditMode(!manualMarkEditMode));
 editMarksBtnTop.addEventListener("click", () => setMarkEditMode(!manualMarkEditMode));
 map.on("click", (e) => {
+  // Finish-line edit takes precedence — admin clicks anywhere to set the
+  // non-RC end of the canonical finish line for the active race.
+  if (finishLineEditMode) {
+    const r = ladderRaceName() || activeRaceFilter ||
+      (window.RACES?.[activeDayKey] || [])[0]?.name;
+    if (!r) {
+      alert("Pick a race tab first.");
+      return;
+    }
+    canonicalFinishLines.set(r, { other: { lat: e.latlng.lat, lon: e.latlng.lng } });
+    saveCanonicalFinishLine(r);
+    setFinishLineEditMode(false);
+    lastRenderedFinishRace = null;
+    renderFinishLineOnMap();
+    return;
+  }
   if (!manualMarkEditMode) return;
   const activeRaceName = visibleRaceForMarks() || activeRaceFilter ||
     (window.RACES?.[activeDayKey] || [])[0]?.name;
@@ -3984,9 +4096,14 @@ async function selectDay(key) {
   setStartLineEditMode(false);
   loadManualMarksForDay(key);
   loadCanonicalStartLinesForDay(key);
+  loadCanonicalFinishLinesForDay(key);
   loadHiddenStartPingsForDay(key);
   showTopMarkBtnIfDayLoaded();
   showEditStartLineBtnIfDayLoaded();
+  if (editFinishLineBtn) {
+    editFinishLineBtn.style.display = (window.RACES?.[key]?.length > 0) ? "block" : "none";
+  }
+  setFinishLineEditMode(false);
   renderDayList();
   renderWindForDay(key);
   renderWindBarb(key);

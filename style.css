@@ -404,6 +404,7 @@ body.mark-edit-mode #map { cursor: crosshair !important; }
 body.mark-edit-mode .leaflet-container,
 body.mark-edit-mode .leaflet-interactive { cursor: crosshair !important; }
 body.start-line-edit-mode .leaflet-container { cursor: pointer !important; }
+body.finish-line-edit-mode .leaflet-container { cursor: crosshair !important; }
 .rs-btn.active { background: #2a6c41 !important; color: #fff; }
 .mark-icon.manual {
   background: #fef3c7;
