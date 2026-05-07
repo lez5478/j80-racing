@@ -1156,13 +1156,23 @@ function applyPerBoatStartVisibility(raceName) {
   for (const { layer, kind } of arr) {
     if (!layer.setStyle) continue;
     if (hideAll) {
+      // Fade out (don't fully hide) and keep interactive flag alone — full
+      // hiding via interactive=false caused Leaflet to recompute layer
+      // pane state which seemed to occasionally drop boats.
       layer.setStyle({ opacity: 0, fillOpacity: 0 });
-      if (layer.options) layer.options.interactive = false;
     } else {
-      // Restore based on kind — same values addTrack used originally.
       if (kind === "ping") layer.setStyle({ opacity: 1, fillOpacity: 1 });
       else if (kind === "line") layer.setStyle({ opacity: 0.9 });
-      if (layer.options) layer.options.interactive = true;
+    }
+  }
+  // Defensive: make sure every track for this race that should be
+  // visible IS visible. Re-add the layer if anything dropped it.
+  for (const t of tracks) {
+    if (t.removed) continue;
+    if (t.meta?.race?.name !== raceName) continue;
+    const matchesFilter = activeRaceFilter == null || t.meta?.race?.name === activeRaceFilter;
+    if (matchesFilter && t.visible && !map.hasLayer(t.layer)) {
+      t.layer.addTo(map);
     }
   }
 }
