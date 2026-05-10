@@ -10,53 +10,50 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   :root { color-scheme: dark; }
-  html, body { margin: 0; padding: 0; background: #0e1a2b; color: #dde7f3; font: 15px/1.4 -apple-system, system-ui, sans-serif; }
+  html, body { margin: 0; padding: 0; background: #0e1a2b; color: #dde7f3; font: 14px/1.4 -apple-system, system-ui, sans-serif; }
   body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
 
-  #header { padding: 8px 14px; display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid #1f3a5a; }
-  #header h1 { margin: 0; font-size: 14px; color: #6ea8ff; font-weight: 600; }
+  #header { padding: 6px 12px; display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid #1f3a5a; }
+  #header h1 { margin: 0; font-size: 13px; color: #6ea8ff; font-weight: 600; }
   #wind-src { font-size: 11px; color: #8fb3df; }
 
-  #skew-card {
-    padding: 16px 14px; text-align: center;
-    background: #102236; border-bottom: 1px solid #1f3a5a;
-  }
-  .skew-num { font-size: 56px; line-height: 1; font-weight: 700; letter-spacing: -2px; }
-  .skew-num.green { color: #22c55e; }
-  .skew-num.amber { color: #f59e0b; }
-  .skew-num.red { color: #ef4444; }
-  .skew-num.gray { color: #6f8aa8; }
-  .skew-tag { font-size: 13px; margin-top: 4px; color: #c5d8ee; }
+  #cards { display: flex; flex-direction: column; gap: 1px; background: #1f3a5a; }
+  .card { background: #102236; padding: 8px 12px; }
+  .card .label { font-size: 10px; color: #8fb3df; text-transform: uppercase; letter-spacing: 0.5px; }
+  .card .value { font-size: 22px; font-weight: 700; line-height: 1.1; margin-top: 2px; letter-spacing: -0.5px; }
+  .card .tag { font-size: 11px; color: #c5d8ee; margin-top: 2px; }
+  .value.green { color: #22c55e; }
+  .value.amber { color: #f59e0b; }
+  .value.red { color: #ef4444; }
+  .value.gray { color: #6f8aa8; }
 
-  #map { flex: 1; min-height: 220px; background: #16263a; }
-
-  #stats {
-    display: grid; grid-template-columns: 1fr 1fr 1fr;
-    gap: 1px; background: #1f3a5a; padding: 0;
-    font-size: 12px;
-  }
-  .stat { background: #102236; padding: 8px 4px; text-align: center; }
-  .stat .k { color: #8fb3df; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
-  .stat .v { font-size: 16px; font-weight: 600; color: #dde7f3; margin-top: 2px; }
+  #map { flex: 1; min-height: 200px; background: #16263a; }
 
   #suggested {
-    padding: 10px 14px; background: #0a1d12; border-top: 1px solid #1c4030;
-    font-size: 14px; color: #a3e3a3; text-align: center; min-height: 1.4em;
+    padding: 8px 12px; background: #0a1d12; border-top: 1px solid #1c4030;
+    font-size: 13px; color: #a3e3a3; text-align: center; min-height: 1.4em;
   }
 
   #buttons {
-    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1px;
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
     background: #1f3a5a;
   }
   #buttons button {
-    background: #1c3653; color: #fff; border: 0; padding: 14px 0;
-    font-size: 14px; font-weight: 600; cursor: pointer; min-height: 56px;
+    background: #1c3653; color: #fff; border: 0; padding: 12px 0;
+    font-size: 12px; font-weight: 600; cursor: pointer; min-height: 52px;
   }
   #buttons button:active { background: #264168; }
-  #buttons .pin { background: #1f4d2e; }
-  #buttons .pin:active { background: #2a6c41; }
   #buttons .pinned { background: #2a6c41; }
-  #buttons .reset { background: #4d1f1f; }
+
+  #controls {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px;
+    background: #1f3a5a;
+  }
+  #controls button {
+    background: #1c3653; color: #fff; border: 0; padding: 10px 0;
+    font-size: 12px; font-weight: 500; cursor: pointer;
+  }
+  #controls .reset { background: #4d1f1f; }
 
   #wind-controls {
     padding: 8px 12px; background: #0e1a2b; border-top: 1px solid #1f3a5a;
@@ -67,10 +64,7 @@
     background: #16263a; color: #dde7f3; border: 1px solid #2a4263;
     border-radius: 4px; padding: 4px 6px; font: inherit;
   }
-  #wind-controls input[type=number] { width: 60px; }
-
-  /* Course diagram overlay drawn on the map */
-  .skew-svg-overlay { pointer-events: none; }
+  #wind-controls input[type=number] { width: 56px; }
 
   .pin-marker {
     background: #facc15; color: #0f1924; font-weight: 700; font-size: 11px;
@@ -81,6 +75,8 @@
   }
   .pin-marker.W { background: #ef4444; color: #fff; }
   .pin-marker.L { background: #22c55e; color: #fff; }
+  .pin-marker.CB { background: #facc15; color: #0f1924; }
+  .pin-marker.P  { background: #22d3ee; color: #0f1924; }
 </style>
 </head>
 <body>
@@ -90,18 +86,25 @@
   <div id="wind-src">wind: —</div>
 </div>
 
-<div id="skew-card">
-  <div id="skew-num" class="skew-num gray">—°</div>
-  <div id="skew-tag" class="skew-tag">pin both marks to begin</div>
+<div id="cards">
+  <div class="card">
+    <div class="label">Windward-mark side bias</div>
+    <div class="value gray" id="wmsBias">—°</div>
+    <div class="tag" id="wmsTag">pin CB + Pin + W to compute</div>
+  </div>
+  <div class="card">
+    <div class="label">Start-line bias</div>
+    <div class="value gray" id="lineBias">—°</div>
+    <div class="tag" id="lineTag">pin CB + Pin to compute</div>
+  </div>
+  <div class="card">
+    <div class="label">Course skew (L → W)</div>
+    <div class="value gray" id="courseSkew">—°</div>
+    <div class="tag" id="courseTag">pin L + W to compute</div>
+  </div>
 </div>
 
 <div id="map"></div>
-
-<div id="stats">
-  <div class="stat"><div class="k">Course brg</div><div class="v" id="courseBrg">—</div></div>
-  <div class="stat"><div class="k">Wind from</div><div class="v" id="twdVal">—</div></div>
-  <div class="stat"><div class="k">Beat</div><div class="v" id="beatLen">—</div></div>
-</div>
 
 <div id="suggested">—</div>
 
@@ -116,10 +119,14 @@
 </div>
 
 <div id="buttons">
-  <button id="pinL" class="pin">📍 Pin L</button>
-  <button id="pinW" class="pin">📍 Pin W</button>
-  <button id="locate">🎯 Centre</button>
-  <button id="reset" class="reset">Reset</button>
+  <button id="pinCB">📍 CB</button>
+  <button id="pinP">📍 Pin</button>
+  <button id="pinW">📍 W</button>
+  <button id="pinL">📍 L</button>
+</div>
+<div id="controls">
+  <button id="locate">🎯 Centre map</button>
+  <button id="reset" class="reset">Clear all pins</button>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>

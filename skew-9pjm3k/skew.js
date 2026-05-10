@@ -1,35 +1,41 @@
-// Skew — private one-screen tool to detect biased windward-leeward courses
-// in HK waters. Runs entirely in the browser; state in localStorage.
+// Skew — private one-screen course-bias detector for HK waters.
+// Three independent metrics:
+//   1. Windward-mark side bias  (CB + Pin + W vs TWD): is W left or right
+//      of the start-line midpoint's wind axis? Tells you which tack to
+//      take off the start to get to the favoured side first.
+//   2. Start-line bias          (CB + Pin vs TWD):     which end of the
+//      line is closer to the wind? Start there.
+//   3. Course skew              (L + W vs TWD):        is the upwind axis
+//      square or biased? Race-officer perspective.
 
-const LS_KEY = "skew.pins.v1";
+const LS_KEY = "skew.pins.v2";
 const RHKYC = [22.288, 114.183];
+const PINS = ["CB", "P", "W", "L"];
 
-// ---------- Map setup ----------
+// ---------- Map ----------
 const map = L.map("map", {
   zoomControl: true, attributionControl: false,
 }).setView(RHKYC, 13);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  maxZoom: 19,
-}).addTo(map);
-L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", {
-  maxZoom: 19, opacity: 0.85,
-}).addTo(map);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+L.tileLayer("https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png", { maxZoom: 19, opacity: 0.85 }).addTo(map);
 
 // ---------- State ----------
-let pins = loadPins();   // { L: {lat,lon} | null, W: {lat,lon} | null }
-let twd = null;          // degrees, wind FROM bearing
-let twdSpd = null;       // kn (just for display)
+let pins = loadPins();   // { CB, P, W, L: {lat,lon} | null }
+let twd = null;          // wind FROM bearing
+let twdSpd = null;
 let twdSource = "—";
 
-const markers = { L: null, W: null };
-const courseLine = L.polyline([], { color: "#a78bfa", weight: 2, dashArray: "6 4" }).addTo(map);
-const idealLine = L.polyline([], { color: "#22c55e", weight: 2, dashArray: "2 6", opacity: 0.7 }).addTo(map);
+const markers = { CB: null, P: null, W: null, L: null };
+const startLine    = L.polyline([], { color: "#facc15", weight: 3, opacity: 0.9 }).addTo(map);
+const courseLine   = L.polyline([], { color: "#a78bfa", weight: 2, dashArray: "6 4" }).addTo(map);
+const idealAxis    = L.polyline([], { color: "#22c55e", weight: 2, dashArray: "2 6", opacity: 0.7 }).addTo(map);
+const wmAxis       = L.polyline([], { color: "#fb923c", weight: 1.5, dashArray: "4 4", opacity: 0.55 }).addTo(map);
 
 function loadPins() {
   try {
     const obj = JSON.parse(localStorage.getItem(LS_KEY) || "{}");
-    return { L: obj.L || null, W: obj.W || null };
-  } catch { return { L: null, W: null }; }
+    return PINS.reduce((acc, k) => { acc[k] = obj[k] || null; return acc; }, {});
+  } catch { return PINS.reduce((acc, k) => { acc[k] = null; return acc; }, {}); }
 }
 function savePins() { localStorage.setItem(LS_KEY, JSON.stringify(pins)); }
 
@@ -56,7 +62,6 @@ function renderPin(label) {
 const toRad = (d) => d * Math.PI / 180;
 const toDeg = (r) => r * 180 / Math.PI;
 
-// Initial bearing from a → b, degrees 0–360.
 function bearing(a, b) {
   const φ1 = toRad(a.lat), φ2 = toRad(b.lat);
   const Δλ = toRad(b.lon - a.lon);
@@ -64,18 +69,13 @@ function bearing(a, b) {
   const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
   return (toDeg(Math.atan2(y, x)) + 360) % 360;
 }
-
-// Great-circle distance, metres.
 function distance(a, b) {
   const R = 6371000;
   const φ1 = toRad(a.lat), φ2 = toRad(b.lat);
   const dφ = toRad(b.lat - a.lat), dλ = toRad(b.lon - a.lon);
-  const x = Math.sin(dφ / 2) ** 2 +
-            Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
+  const x = Math.sin(dφ / 2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(dλ / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
-
-// Project from origin along bearing for distance metres → new lat/lon.
 function project(origin, brgDeg, distM) {
   const R = 6371000;
   const δ = distM / R;
@@ -88,26 +88,66 @@ function project(origin, brgDeg, distM) {
   );
   return { lat: toDeg(φ2), lon: toDeg(λ2) };
 }
+function midpoint(a, b) { return { lat: (a.lat + b.lat) / 2, lon: (a.lon + b.lon) / 2 }; }
+function signedAngle(a, b) {
+  // Smallest signed angle a → b in (-180, 180].
+  let d = b - a;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return d;
+}
 
-// ---------- Skew analysis ----------
-function skewAnalysis() {
+// ---------- Analyses ----------
+function analyseStartLine() {
+  if (!pins.CB || !pins.P || twd == null) return null;
+  // Line bearing CB → Pin. Square = perpendicular to wind = TWD ± 90°.
+  const lineBrg = bearing(pins.CB, pins.P);
+  const idealLineBrg = (twd + 90) % 360; // perpendicular to wind, one of two
+  const otherIdeal = (twd + 270) % 360;
+  // Pick whichever ideal is closer to the actual line bearing.
+  const skewA = signedAngle(idealLineBrg, lineBrg);
+  const skewB = signedAngle(otherIdeal, lineBrg);
+  const skew = Math.abs(skewA) <= Math.abs(skewB) ? skewA : skewB;
+  const lineLen = distance(pins.CB, pins.P);
+  // The favoured end is the one further upwind. Project each end onto the
+  // upwind axis (TWD direction) and compare.
+  const cb = projectOntoUpwindAxis(pins.CB, pins.CB, twd);
+  const pn = projectOntoUpwindAxis(pins.P, pins.CB, twd);
+  let favoured = "square";
+  if (Math.abs(cb - pn) > 1) favoured = pn > cb ? "Pin end" : "CB end";
+  return { skew, lineBrg, lineLen, favoured };
+}
+function projectOntoUpwindAxis(point, origin, twdDeg) {
+  // Returns metres "upwind from origin" along the TWD axis.
+  const brg = bearing(origin, point);
+  const dist = distance(origin, point);
+  const angle = signedAngle(twdDeg, brg);
+  return dist * Math.cos(toRad(angle));
+}
+function analyseWmSideBias() {
+  if (!pins.CB || !pins.P || !pins.W || twd == null) return null;
+  const mid = midpoint(pins.CB, pins.P);
+  // Bearing from start mid to W. Compare with the ideal upwind bearing (TWD).
+  const wBrg = bearing(mid, pins.W);
+  const skew = signedAngle(twd, wBrg);
+  const beatLen = distance(mid, pins.W);
+  // Lateral offset of W from the wind-axis through start mid.
+  const offsetM = beatLen * Math.sin(toRad(skew));
+  // Sign convention: positive skew = W is to the right of TWD when looking
+  // upwind = port-tack favoured (boats need to go right).
+  const side = Math.abs(skew) < 2 ? "centred"
+              : skew > 0 ? "Pin / right side favoured (port-tack approach)"
+              : "CB / left side favoured (starboard-tack approach)";
+  return { skew, beatLen, offsetM, side, mid, wBrg };
+}
+function analyseCourseSkew() {
   if (!pins.L || !pins.W || twd == null) return null;
-  const courseBrg = bearing(pins.L, pins.W);   // pin → windward
-  const idealBeat = (twd + 180) % 360;         // direction the boats want to go
-  let skew = courseBrg - idealBeat;
-  while (skew > 180) skew -= 360;
-  while (skew < -180) skew += 360;
+  const courseBrg = bearing(pins.L, pins.W);
+  const idealBeat = (twd + 180) % 360;
+  const skew = signedAngle(idealBeat, courseBrg);
   const beatLen = distance(pins.L, pins.W);
-  // Lateral offset of the windward mark from the "square" position:
-  // perpendicular distance ≈ beatLen × sin(skew).
   const offsetM = Math.abs(beatLen * Math.sin(toRad(skew)));
-  return {
-    skewDeg: skew, courseBrg, idealBeat, beatLen,
-    offsetM,
-    favoured: Math.abs(skew) < 2 ? "square"
-            : skew > 0 ? "right side / port-tack first"
-            : "left side / starboard-tack first",
-  };
+  return { skew, courseBrg, beatLen, offsetM };
 }
 
 function colourForSkew(absSkew) {
@@ -118,7 +158,6 @@ function colourForSkew(absSkew) {
 
 // ---------- Wind ----------
 async function fetchHkoWind() {
-  // Reuse the parent app's API. Same origin, no CORS issues.
   try {
     const r = await fetch("/api/wind");
     if (!r.ok) throw new Error(r.status);
@@ -126,7 +165,6 @@ async function fetchHkoWind() {
     const today = new Date().toISOString().slice(0, 10);
     const byStation = data.hourly?.[today];
     if (!byStation) return null;
-    // Average across stations using vector sum, weighted equally.
     let sx = 0, sy = 0, sumSpd = 0, n = 0;
     for (const series of Object.values(byStation)) {
       const last = series[series.length - 1];
@@ -143,16 +181,12 @@ async function fetchHkoWind() {
     return null;
   }
 }
-
 async function refreshWind() {
   const src = document.getElementById("windSrc").value;
   if (src === "hko") {
     const w = await fetchHkoWind();
-    if (w) {
-      twd = w.deg; twdSpd = w.spd; twdSource = w.src;
-    } else {
-      twdSource = "HKO unavailable";
-    }
+    if (w) { twd = w.deg; twdSpd = w.spd; twdSource = w.src; }
+    else twdSource = "HKO unavailable";
   } else if (src === "manual") {
     const td = parseFloat(document.getElementById("manualTwd").value);
     const ts = parseFloat(document.getElementById("manualSpd").value);
@@ -164,100 +198,123 @@ async function refreshWind() {
 }
 
 // ---------- Render ----------
-function fmtBrg(d) { return d == null ? "—" : `${Math.round(d)}°`; }
-function fmtDist(m) {
+const fmtBrg = (d) => d == null ? "—" : `${Math.round(d)}°`;
+const fmtDist = (m) => {
   if (m == null) return "—";
   const nm = m / 1852;
   return nm < 0.5 ? `${Math.round(m)} m` : `${nm.toFixed(2)} nm`;
+};
+const fmtSkew = (d) => d == null ? "—°" : `${d > 0 ? "+" : ""}${d.toFixed(1)}°`;
+
+function setCard(numId, tagId, signedDeg, tagText, fallback) {
+  const numEl = document.getElementById(numId);
+  const tagEl = document.getElementById(tagId);
+  if (signedDeg == null) {
+    numEl.className = "value gray";
+    numEl.textContent = "—°";
+    tagEl.textContent = fallback;
+    return;
+  }
+  numEl.className = "value " + colourForSkew(Math.abs(signedDeg));
+  numEl.textContent = fmtSkew(signedDeg);
+  tagEl.textContent = tagText;
 }
 
 function recompute() {
-  for (const k of ["L", "W"]) renderPin(k);
+  for (const k of PINS) renderPin(k);
   document.getElementById("wind-src").textContent =
     twd != null ? `wind: ${Math.round(twd)}° ${twdSpd ? "· " + twdSpd.toFixed(0) + " kn" : ""} (${twdSource})`
                 : `wind: ${twdSource}`;
 
-  const a = skewAnalysis();
-  const numEl = document.getElementById("skew-num");
-  const tagEl = document.getElementById("skew-tag");
-  if (!a) {
-    numEl.className = "skew-num gray";
-    numEl.textContent = "—°";
-    tagEl.textContent = !pins.L ? "tap 'Pin L' at the leeward mark"
-                       : !pins.W ? "tap 'Pin W' at the windward mark"
-                       : "waiting for wind direction";
-    document.getElementById("courseBrg").textContent = "—";
-    document.getElementById("twdVal").textContent = twd != null ? fmtBrg(twd) : "—";
-    document.getElementById("beatLen").textContent = "—";
-    document.getElementById("suggested").textContent = "—";
-    courseLine.setLatLngs([]);
-    idealLine.setLatLngs([]);
-    return;
+  const wms = analyseWmSideBias();
+  const line = analyseStartLine();
+  const course = analyseCourseSkew();
+
+  setCard("wmsBias", "wmsTag",
+    wms?.skew, wms ? wms.side : "",
+    !pins.CB ? "pin CB" : !pins.P ? "pin Pin end" : !pins.W ? "pin W" : "waiting for wind");
+  setCard("lineBias", "lineTag",
+    line?.skew, line ? `${Math.abs(line.skew) < 2 ? "square" : line.favoured + " favoured"} · ${fmtDist(line.lineLen)}` : "",
+    !pins.CB ? "pin CB" : !pins.P ? "pin Pin end" : "waiting for wind");
+  setCard("courseSkew", "courseTag",
+    course?.skew, course ? `course ${fmtBrg(course.courseBrg)} · ${fmtDist(course.beatLen)}` : "",
+    !pins.L ? "pin L" : !pins.W ? "pin W" : "waiting for wind");
+
+  // Suggested action: prioritise the windward-mark side bias if it's set,
+  // otherwise the start-line bias if just CB/Pin, else course skew.
+  let advice = "—";
+  if (wms && Math.abs(wms.skew) >= 2) {
+    const m = Math.round(Math.abs(wms.offsetM));
+    advice = `W is offset ${m} m to the ${wms.skew > 0 ? "Pin" : "CB"} side. ` +
+             `Get to the ${wms.skew > 0 ? "right" : "left"} side off the start.`;
+  } else if (line && Math.abs(line.skew) >= 2) {
+    advice = `Start line skewed — ${line.favoured} is favoured.`;
+  } else if (course && Math.abs(course.skew) >= 2) {
+    const m = Math.round(course.offsetM);
+    advice = `Course is skewed ${course.skew > 0 ? "right" : "left"} by ${m} m at the W mark.`;
+  } else if (wms || line || course) {
+    advice = "Course / line are square ✓";
   }
+  document.getElementById("suggested").textContent = advice;
 
-  const abs = Math.abs(a.skewDeg);
-  numEl.className = "skew-num " + colourForSkew(abs);
-  numEl.textContent = `${a.skewDeg > 0 ? "+" : ""}${a.skewDeg.toFixed(1)}°`;
-  tagEl.textContent = a.favoured;
+  // Map overlays.
+  startLine.setLatLngs(pins.CB && pins.P
+    ? [[pins.CB.lat, pins.CB.lon], [pins.P.lat, pins.P.lon]]
+    : []);
+  courseLine.setLatLngs(pins.L && pins.W
+    ? [[pins.L.lat, pins.L.lon], [pins.W.lat, pins.W.lon]]
+    : []);
+  // Ideal upwind axis from the start-line mid (or L if no line) — green dashes.
+  if (twd != null) {
+    const origin = (pins.CB && pins.P) ? midpoint(pins.CB, pins.P) : pins.L;
+    if (origin) {
+      const len = wms ? wms.beatLen : (course ? course.beatLen : 600);
+      const tip = project(origin, twd, len);
+      idealAxis.setLatLngs([[origin.lat, origin.lon], [tip.lat, tip.lon]]);
+    } else idealAxis.setLatLngs([]);
+  } else idealAxis.setLatLngs([]);
+  // Actual axis from start-line mid → W (orange dashes).
+  if (wms) {
+    wmAxis.setLatLngs([[wms.mid.lat, wms.mid.lon], [pins.W.lat, pins.W.lon]]);
+  } else wmAxis.setLatLngs([]);
 
-  document.getElementById("courseBrg").textContent = fmtBrg(a.courseBrg);
-  document.getElementById("twdVal").textContent = fmtBrg(twd);
-  document.getElementById("beatLen").textContent = fmtDist(a.beatLen);
-
-  // Suggested move: how far + which direction to walk W to make the course square.
-  let move = "Course is square ✓";
-  if (abs >= 2) {
-    const moveM = Math.round(a.offsetM);
-    const moveBrg = (a.idealBeat + (a.skewDeg > 0 ? -90 : 90) + 360) % 360;
-    move = `Move W mark ~${moveM} m on bearing ${Math.round(moveBrg)}°`;
-  }
-  document.getElementById("suggested").textContent = move;
-
-  // Map overlays: pin → W actual + ideal-beat ghost from L.
-  courseLine.setLatLngs([[pins.L.lat, pins.L.lon], [pins.W.lat, pins.W.lon]]);
-  const ghost = project(pins.L, a.idealBeat, a.beatLen);
-  idealLine.setLatLngs([[pins.L.lat, pins.L.lon], [ghost.lat, ghost.lon]]);
-
-  // Frame both pins.
-  if (pins.L && pins.W) {
-    map.fitBounds(L.latLngBounds([
-      [pins.L.lat, pins.L.lon], [pins.W.lat, pins.W.lon], [ghost.lat, ghost.lon],
-    ]), { padding: [40, 40] });
+  // Frame all set pins.
+  const placedLLs = PINS.filter((k) => pins[k]).map((k) => [pins[k].lat, pins[k].lon]);
+  if (placedLLs.length >= 2) {
+    map.fitBounds(L.latLngBounds(placedLLs), { padding: [40, 40], maxZoom: 16 });
   }
 }
 
 // ---------- UI wiring ----------
 function pinHere(label, btn) {
   if (!navigator.geolocation) { alert("No GPS"); return; }
+  const orig = btn.textContent;
   btn.textContent = "📍 …";
   btn.disabled = true;
   navigator.geolocation.getCurrentPosition(
     (p) => {
       pins[label] = { lat: p.coords.latitude, lon: p.coords.longitude };
-      savePins();
-      recompute();
-      btn.textContent = `✓ ${label} pinned`;
+      savePins(); recompute();
+      btn.textContent = `✓ ${label}`;
       btn.classList.add("pinned");
       btn.disabled = false;
-      setTimeout(() => {
-        btn.textContent = `📍 Pin ${label}`;
-        btn.classList.remove("pinned");
-      }, 2000);
+      setTimeout(() => { btn.textContent = orig; btn.classList.remove("pinned"); }, 2000);
     },
     (err) => {
       alert(`GPS failed: ${err.message}`);
-      btn.textContent = `📍 Pin ${label}`;
-      btn.disabled = false;
+      btn.textContent = orig; btn.disabled = false;
     },
     { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 },
   );
 }
+for (const [label, id] of [["CB", "pinCB"], ["P", "pinP"], ["W", "pinW"], ["L", "pinL"]]) {
+  document.getElementById(id).onclick = (e) => pinHere(label, e.target);
+}
 
-document.getElementById("pinL").onclick = (e) => pinHere("L", e.target);
-document.getElementById("pinW").onclick = (e) => pinHere("W", e.target);
 document.getElementById("locate").onclick = () => {
-  if (pins.L && pins.W) {
-    map.fitBounds(L.latLngBounds([[pins.L.lat, pins.L.lon], [pins.W.lat, pins.W.lon]]), { padding: [40, 40] });
+  const placed = PINS.filter((k) => pins[k]).map((k) => [pins[k].lat, pins[k].lon]);
+  if (placed.length >= 2) {
+    map.fitBounds(L.latLngBounds(placed), { padding: [40, 40] });
   } else if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition(
       (p) => map.setView([p.coords.latitude, p.coords.longitude], 15),
@@ -266,21 +323,20 @@ document.getElementById("locate").onclick = () => {
   }
 };
 document.getElementById("reset").onclick = () => {
-  if (!confirm("Clear both pins?")) return;
-  pins = { L: null, W: null };
-  savePins();
-  recompute();
+  if (!confirm("Clear all pins?")) return;
+  pins = PINS.reduce((acc, k) => { acc[k] = null; return acc; }, {});
+  savePins(); recompute();
 };
 
-// Allow tap-to-place if no pin yet for that label (long-press or just sequential).
-let nextPin = null;
+// Tap map to place the next un-pinned mark in priority order CB → P → W → L.
 map.on("click", (e) => {
-  if (!pins.L) nextPin = "L";
-  else if (!pins.W) nextPin = "W";
-  else return;
-  pins[nextPin] = { lat: e.latlng.lat, lon: e.latlng.lng };
-  savePins();
-  recompute();
+  for (const k of PINS) {
+    if (!pins[k]) {
+      pins[k] = { lat: e.latlng.lat, lon: e.latlng.lng };
+      savePins(); recompute();
+      return;
+    }
+  }
 });
 
 const windSrcSel = document.getElementById("windSrc");
@@ -295,21 +351,14 @@ windSrcSel.onchange = () => {
 manTwd.oninput = () => refreshWind();
 manSpd.oninput = () => refreshWind();
 
-// Refresh HKO wind every 5 min while the page is open.
 refreshWind();
-setInterval(() => {
-  if (windSrcSel.value === "hko") refreshWind();
-}, 5 * 60 * 1000);
+setInterval(() => { if (windSrcSel.value === "hko") refreshWind(); }, 5 * 60 * 1000);
 
-// Initial render to show whatever's persisted.
 recompute();
 
-// Keep screen awake while in use (modern browsers).
 if ("wakeLock" in navigator) {
   let wl = null;
-  const acquire = async () => {
-    try { wl = await navigator.wakeLock.request("screen"); } catch {}
-  };
+  const acquire = async () => { try { wl = await navigator.wakeLock.request("screen"); } catch {} };
   acquire();
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") acquire();
