@@ -159,7 +159,11 @@ function colourForSkew(absSkew) {
 // ---------- Wind ----------
 async function fetchHkoWind() {
   try {
-    const r = await fetch("/api/wind");
+    // 5-second hard timeout so a stalled API call can't freeze the page.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch("/api/wind", { signal: ctrl.signal });
+    clearTimeout(timer);
     if (!r.ok) throw new Error(r.status);
     const data = await r.json();
     const today = new Date().toISOString().slice(0, 10);
@@ -351,10 +355,11 @@ windSrcSel.onchange = () => {
 manTwd.oninput = () => refreshWind();
 manSpd.oninput = () => refreshWind();
 
-refreshWind();
-setInterval(() => { if (windSrcSel.value === "hko") refreshWind(); }, 5 * 60 * 1000);
-
+// Render once immediately so the UI is interactive even before the wind
+// fetch lands; refreshWind() then re-renders when it returns.
 recompute();
+refreshWind().catch((e) => console.warn("initial wind fetch failed:", e));
+setInterval(() => { if (windSrcSel.value === "hko") refreshWind(); }, 5 * 60 * 1000);
 
 if ("wakeLock" in navigator) {
   let wl = null;
