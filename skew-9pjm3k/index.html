@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Skew · private</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#0e1a2b" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; padding: 0; background: #0e1a2b; color: #dde7f3; font: 15px/1.4 -apple-system, system-ui, sans-serif; }
+  body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); display: flex; flex-direction: column; height: 100vh; box-sizing: border-box; }
+
+  #header { padding: 8px 14px; display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid #1f3a5a; }
+  #header h1 { margin: 0; font-size: 14px; color: #6ea8ff; font-weight: 600; }
+  #wind-src { font-size: 11px; color: #8fb3df; }
+
+  #skew-card {
+    padding: 16px 14px; text-align: center;
+    background: #102236; border-bottom: 1px solid #1f3a5a;
+  }
+  .skew-num { font-size: 56px; line-height: 1; font-weight: 700; letter-spacing: -2px; }
+  .skew-num.green { color: #22c55e; }
+  .skew-num.amber { color: #f59e0b; }
+  .skew-num.red { color: #ef4444; }
+  .skew-num.gray { color: #6f8aa8; }
+  .skew-tag { font-size: 13px; margin-top: 4px; color: #c5d8ee; }
+
+  #map { flex: 1; min-height: 220px; background: #16263a; }
+
+  #stats {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 1px; background: #1f3a5a; padding: 0;
+    font-size: 12px;
+  }
+  .stat { background: #102236; padding: 8px 4px; text-align: center; }
+  .stat .k { color: #8fb3df; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .stat .v { font-size: 16px; font-weight: 600; color: #dde7f3; margin-top: 2px; }
+
+  #suggested {
+    padding: 10px 14px; background: #0a1d12; border-top: 1px solid #1c4030;
+    font-size: 14px; color: #a3e3a3; text-align: center; min-height: 1.4em;
+  }
+
+  #buttons {
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 1px;
+    background: #1f3a5a;
+  }
+  #buttons button {
+    background: #1c3653; color: #fff; border: 0; padding: 14px 0;
+    font-size: 14px; font-weight: 600; cursor: pointer; min-height: 56px;
+  }
+  #buttons button:active { background: #264168; }
+  #buttons .pin { background: #1f4d2e; }
+  #buttons .pin:active { background: #2a6c41; }
+  #buttons .pinned { background: #2a6c41; }
+  #buttons .reset { background: #4d1f1f; }
+
+  #wind-controls {
+    padding: 8px 12px; background: #0e1a2b; border-top: 1px solid #1f3a5a;
+    display: flex; gap: 8px; align-items: center; font-size: 12px;
+  }
+  #wind-controls label { color: #8fb3df; }
+  #wind-controls select, #wind-controls input {
+    background: #16263a; color: #dde7f3; border: 1px solid #2a4263;
+    border-radius: 4px; padding: 4px 6px; font: inherit;
+  }
+  #wind-controls input[type=number] { width: 60px; }
+
+  /* Course diagram overlay drawn on the map */
+  .skew-svg-overlay { pointer-events: none; }
+
+  .pin-marker {
+    background: #facc15; color: #0f1924; font-weight: 700; font-size: 11px;
+    border: 2px solid #0f1924; border-radius: 50%;
+    width: 26px; height: 26px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.6);
+  }
+  .pin-marker.W { background: #ef4444; color: #fff; }
+  .pin-marker.L { background: #22c55e; color: #fff; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>Skew · private</h1>
+  <div id="wind-src">wind: —</div>
+</div>
+
+<div id="skew-card">
+  <div id="skew-num" class="skew-num gray">—°</div>
+  <div id="skew-tag" class="skew-tag">pin both marks to begin</div>
+</div>
+
+<div id="map"></div>
+
+<div id="stats">
+  <div class="stat"><div class="k">Course brg</div><div class="v" id="courseBrg">—</div></div>
+  <div class="stat"><div class="k">Wind from</div><div class="v" id="twdVal">—</div></div>
+  <div class="stat"><div class="k">Beat</div><div class="v" id="beatLen">—</div></div>
+</div>
+
+<div id="suggested">—</div>
+
+<div id="wind-controls">
+  <label>Wind:</label>
+  <select id="windSrc">
+    <option value="hko">HKO live</option>
+    <option value="manual">Manual</option>
+  </select>
+  <input id="manualTwd" type="number" min="0" max="359" placeholder="TWD°" hidden />
+  <input id="manualSpd" type="number" min="0" max="60" placeholder="kn" hidden />
+</div>
+
+<div id="buttons">
+  <button id="pinL" class="pin">📍 Pin L</button>
+  <button id="pinW" class="pin">📍 Pin W</button>
+  <button id="locate">🎯 Centre</button>
+  <button id="reset" class="reset">Reset</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="skew.js"></script>
+</body>
+</html>
