@@ -4532,24 +4532,50 @@ function renderMatchChip() {
   if (!rivals.length) { matchChipEl.classList.remove("live"); return; }
   matchChipRivalIdx = ((matchChipRivalIdx % rivals.length) + rivals.length) % rivals.length;
   const rival = rivals[matchChipRivalIdx];
-  const r = liveTimeGap(me, rival, raceTime);
+  // Wind & start-line midpoint for ladder-progress projection. Falls back
+  // to the boat's own start point if no canonical/auto start line exists.
+  const raceName = me.meta?.race?.name;
+  const windDeg = raceName ? raceWindByName.get(raceName) : null;
+  const sm = raceName ? startLineForRace(raceName) : null;
+  const origin = (sm?.rc && sm?.pin)
+    ? { lat: (sm.rc.lat + sm.pin.lat) / 2, lon: (sm.rc.lon + sm.pin.lon) / 2 }
+    : me.points[0];
+  const r = liveTimeGap(me, rival, raceTime, windDeg, origin);
   if (!r) { matchChipEl.classList.remove("live"); return; }
   matchChipEl.classList.add("live");
   matchChipEl.querySelector(".mc-me").textContent = me.meta?.boat || me.name;
   matchChipEl.querySelector(".mc-rival").textContent = rival.meta?.boat || rival.name;
   const gapEl = matchChipEl.querySelector(".mc-gap");
-  const abs = Math.abs(r.gapSec);
-  if (abs < 1) {
+  if (r.gapSec == null) {
     gapEl.className = "mc-gap even";
-    gapEl.textContent = "level";
-  } else if (r.gapSec > 0) {
-    gapEl.className = "mc-gap ahead";
-    gapEl.textContent = `+${abs < 60 ? abs.toFixed(1) + "s" : Math.floor(abs / 60) + ":" + String(Math.floor(abs) % 60).padStart(2, "0")} ahead`;
+    gapEl.textContent = "—";
   } else {
-    gapEl.className = "mc-gap behind";
-    gapEl.textContent = `−${abs < 60 ? abs.toFixed(1) + "s" : Math.floor(abs / 60) + ":" + String(Math.floor(abs) % 60).padStart(2, "0")} behind`;
+    const abs = Math.abs(r.gapSec);
+    const fmt = abs < 60
+      ? `${abs.toFixed(1)}s`
+      : `${Math.floor(abs / 60)}:${String(Math.floor(abs) % 60).padStart(2, "0")}`;
+    if (abs < 1) {
+      gapEl.className = "mc-gap even";
+      gapEl.textContent = "level";
+    } else if (r.gapSec > 0) {
+      gapEl.className = "mc-gap ahead";
+      gapEl.textContent = `+${fmt} ahead`;
+    } else {
+      gapEl.className = "mc-gap behind";
+      gapEl.textContent = `−${fmt} behind`;
+    }
   }
-  const hint = rivals.length > 1 ? `tap · rival ${matchChipRivalIdx + 1}/${rivals.length}` : "";
+  // Lateral chip: which side of the rhumb is the selected boat on?
+  let lateralStr = "";
+  if (r.lateralM != null && isFinite(r.lateralM)) {
+    const m = Math.abs(r.lateralM);
+    if (m < 20) lateralStr = "centred";
+    else lateralStr = `${Math.round(m)} m ${r.lateralM > 0 ? "right" : "left"} of rhumb`;
+  }
+  const legStr = r.legSign === -1 ? "downwind leg" : "upwind leg";
+  const hint = rivals.length > 1
+    ? `${legStr} · ${lateralStr} · tap · ${matchChipRivalIdx + 1}/${rivals.length}`
+    : `${legStr} · ${lateralStr}`;
   matchChipEl.querySelector(".mc-hint").textContent = hint;
 }
 matchChipEl?.addEventListener("click", () => {
@@ -4557,55 +4583,108 @@ matchChipEl?.addEventListener("click", () => {
   renderMatchChip();
 });
 
-// Live single-value time gap between two boats at one instant of race time.
-// Uses each boat's cumulative-distance-along-track (cumDist) as the
-// progress metric: if A has covered more ground than B at time t, A is
-// "ahead". To convert metres into seconds, look back through A's history
-// to find when A had B's current distance — that delta is the gap.
-//
-// Returns { gapSec, leader } where:
-//   gapSec > 0  → trackA leads trackB by gapSec seconds
-//   gapSec < 0  → trackA trails trackB
-//   leader is the name of the leading boat.
-function liveTimeGap(trackA, trackB, atSec) {
-  if (!trackA?.points?.length || !trackB?.points?.length) return null;
-  const aT = Math.max(trackA.tStart, Math.min(trackA.tEnd, atSec));
-  const bT = Math.max(trackB.tStart, Math.min(trackB.tEnd, atSec));
-  const idxAt = (track, t) => {
-    let lo = 0, hi = track.points.length - 1;
-    while (lo + 1 < hi) {
-      const mid = (lo + hi) >> 1;
-      if (track.points[mid].t <= t) lo = mid; else hi = mid;
-    }
-    return lo;
-  };
-  const iA = idxAt(trackA, aT);
-  const iB = idxAt(trackB, bT);
-  const dA = trackA.cumDist[iA];
-  const dB = trackB.cumDist[iB];
-  if (Math.abs(dA - dB) < 1) return { gapSec: 0, leader: null };
-  // Whichever boat has gone farther is the leader. Find when the trailing
-  // boat was at the leader's current cumDist (or, equivalently, when the
-  // leader was at the trailing boat's current cumDist).
-  const lead = dA > dB ? trackA : trackB;
-  const trail = dA > dB ? trackB : trackA;
-  const trailDist = dA > dB ? dB : dA;
-  // Find earliest index where lead.cumDist >= trailDist — that's when the
-  // leader matched the trailing boat's CURRENT progress.
-  const cum = lead.cumDist;
-  let lo = 0, hi = cum.length - 1;
+// Cache of per-point wind-axis projections. Float64Array of metres "upwind
+// from origin" for each track sample. Keyed by track + wind + origin so
+// it only rebuilds when something changes.
+const _windProgressCache = new Map();
+function getWindProgress(track, windDeg, origin) {
+  const key = `${track.id}|${windDeg.toFixed(1)}|${origin.lat.toFixed(5)}|${origin.lon.toFixed(5)}`;
+  const cached = _windProgressCache.get(key);
+  if (cached) return cached;
+  const windRad = windDeg * Math.PI / 180;
+  const upE = Math.sin(windRad), upN = Math.cos(windRad);
+  const mLat = 111_320;
+  const mLon = 111_320 * Math.cos(origin.lat * Math.PI / 180);
+  const arr = new Float64Array(track.points.length);
+  for (let i = 0; i < track.points.length; i++) {
+    const p = track.points[i];
+    const dE = (p.lon - origin.lon) * mLon;
+    const dN = (p.lat - origin.lat) * mLat;
+    arr[i] = dE * upE + dN * upN;
+  }
+  _windProgressCache.set(key, arr);
+  return arr;
+}
+function _idxAtTime(track, t) {
+  let lo = 0, hi = track.points.length - 1;
   while (lo + 1 < hi) {
     const mid = (lo + hi) >> 1;
-    if (cum[mid] < trailDist) lo = mid; else hi = mid;
+    if (track.points[mid].t <= t) lo = mid; else hi = mid;
   }
-  const leadTimeAtTrailDist = lead.points[hi]?.t ?? lead.tStart;
+  return lo;
+}
+
+// Live single-value time gap between two boats at one instant, using
+// **wind-axis ladder progress** as the metric — not total distance
+// sailed. Boat that is furthest up the ladder (on upwind legs) or down
+// it (on downwind legs) is "ahead". To convert metres of ladder lead
+// into seconds, look back through the leader's history for when it had
+// the trailing boat's CURRENT ladder progress — that delta is the gap.
+//
+// Leg sign auto-detected from recent wind-axis velocity of both boats.
+// Lateral offset = projection of selected boat onto axis perpendicular
+// to wind (positive = right of rhumb when looking upwind).
+function liveTimeGap(trackA, trackB, atSec, windDeg, origin) {
+  if (!trackA?.points?.length || !trackB?.points?.length) return null;
+  if (windDeg == null || !origin) return null;
+  const aT = Math.max(trackA.tStart, Math.min(trackA.tEnd, atSec));
+  const bT = Math.max(trackB.tStart, Math.min(trackB.tEnd, atSec));
+  const progA = getWindProgress(trackA, windDeg, origin);
+  const progB = getWindProgress(trackB, windDeg, origin);
+  const iA = _idxAtTime(trackA, aT);
+  const iB = _idxAtTime(trackB, bT);
+  // Determine leg direction from wind-axis velocity over the last 30 s
+  // — positive = going upwind, negative = downwind.
+  const back = 30;
+  const iAprev = _idxAtTime(trackA, Math.max(trackA.tStart, aT - back));
+  const iBprev = _idxAtTime(trackB, Math.max(trackB.tStart, bT - back));
+  const dtA = Math.max(1, aT - trackA.points[iAprev].t);
+  const dtB = Math.max(1, bT - trackB.points[iBprev].t);
+  const vA = (progA[iA] - progA[iAprev]) / dtA;
+  const vB = (progB[iB] - progB[iBprev]) / dtB;
+  const sign = (vA + vB) >= 0 ? 1 : -1;
+  const adjA = progA[iA] * sign;
+  const adjB = progB[iB] * sign;
+  // Lateral offset of trackA: project onto perpendicular (rotate wind
+  // vector -90° = right side when looking upwind).
+  const windRad = windDeg * Math.PI / 180;
+  const perpE = Math.cos(windRad), perpN = -Math.sin(windRad);
+  const pA = trackA.points[iA];
+  const mLat = 111_320;
+  const mLon = 111_320 * Math.cos(origin.lat * Math.PI / 180);
+  const dE = (pA.lon - origin.lon) * mLon;
+  const dN = (pA.lat - origin.lat) * mLat;
+  const lateralM = dE * perpE + dN * perpN;
+  if (Math.abs(adjA - adjB) < 1) {
+    return { gapSec: 0, leader: null, lateralM, legSign: sign };
+  }
+  const lead = adjA > adjB ? trackA : trackB;
+  const leadProg = adjA > adjB ? progA : progB;
+  const trail = adjA > adjB ? trackB : trackA;
+  const trailAdj = adjA > adjB ? adjB : adjA;
+  // Walk lead's history backward until its adjusted progress dips below
+  // the trailing boat's CURRENT progress. Interpolate for sub-step
+  // resolution.
+  const leadIdxNow = lead === trackA ? iA : iB;
+  let crossT = null;
+  for (let j = leadIdxNow; j > 0; j--) {
+    if (leadProg[j] * sign < trailAdj) {
+      const p0 = leadProg[j] * sign, p1 = leadProg[j + 1] * sign;
+      const t0 = lead.points[j].t, t1 = lead.points[j + 1].t;
+      const frac = p1 === p0 ? 0 : (trailAdj - p0) / (p1 - p0);
+      crossT = t0 + (t1 - t0) * frac;
+      break;
+    }
+  }
+  if (crossT == null) return { gapSec: null, leader: null, lateralM, legSign: sign };
   const trailTimeNow = trail === trackA ? aT : bT;
-  const gapAbs = trailTimeNow - leadTimeAtTrailDist;
-  // Sign convention: positive = trackA ahead.
-  const signed = (lead === trackA) ? gapAbs : -gapAbs;
+  const gapAbs = trailTimeNow - crossT;
+  const signedGap = (lead === trackA) ? gapAbs : -gapAbs;
   return {
-    gapSec: signed,
+    gapSec: signedGap,
     leader: lead.meta?.boat || lead.name,
+    lateralM,
+    legSign: sign,
   };
 }
 
