@@ -528,7 +528,7 @@ function addTrack(name, points, meta = {}) {
   const track = {
     id, name, layer, line, points, color, visible: true,
     latlngs, fullBounds, cumDist, gaps,
-    boat, maxSog,
+    boat, maxSog, startMarker: start,
     tStart: points[0].t, tEnd: points[points.length - 1].t,
     meta, // { race, boat, window } when set by selectDay
   };
@@ -3566,6 +3566,16 @@ function updateBoatsToRaceTime(t) {
     while (lo + 1 < hi) {
       const mid = (lo + hi) >> 1;
       if (pts[mid].t <= clamped) lo = mid; else hi = mid;
+    }
+    // Hide the start-position dot once the race has started — only useful
+    // during the pre-start window to see where the boat began recording.
+    if (tr.startMarker) {
+      const rstart = tr.meta?.race?.start ? Date.parse(tr.meta.race.start) / 1000 : null;
+      const showStartDot = rstart == null || clamped < rstart;
+      tr.startMarker.setStyle({
+        opacity: showStartDot ? 1 : 0,
+        fillOpacity: showStartDot ? 1 : 0,
+      });
     }
     // Trim the trail to the last 2 minutes BEFORE the gun onwards. Pre-start
     // wandering creates noise that hides the actual race tactics, so we
