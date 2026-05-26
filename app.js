@@ -4614,33 +4614,61 @@ function getWindProgress(track, windDeg, origin) {
   return arr;
 }
 
-// MONOTONIC course progress: cumulative absolute wind-axis change of a
-// smoothed projection. Smoothing filters out the small wind-axis
-// reversals from tacks/gybes so the number tracks the boat's progress
-// along the actual course — climbing the ladder on a beat, descending
-// it on a run, climbing again on the next beat. After rounding a mark
-// the metric keeps rising, so the leader stays ahead even though their
-// raw wind-axis projection is now decreasing (downwind) while trailing
-// boats' are still increasing (still beating).
+// MONOTONIC course progress with proper leg detection.
+//
+// Tactical sailing (tacks, headers, lay-line corrections) causes small
+// wind-axis oscillations that inflate cumulative-abs metrics. Instead we
+// detect actual legs by tracking peaks/troughs in the smoothed wind-axis
+// projection: a leg ends when the projection reverses by more than a
+// hysteresis distance from its peak. Each completed leg contributes its
+// peak-to-start range to the total — tactical loops add ZERO.
+//
+// Within the current leg we use the rolling max excursion from the leg
+// start, so the metric is non-decreasing across the entire race.
 const _courseProgressCache = new Map();
+const LEG_HYSTERESIS_M = 80;   // must "fall back" 80 m before counting a flip
+const SMOOTH_HALF_W = 15;       // ±15 samples ≈ ±30 s smoothing
 function getCourseProgress(track, windDeg, origin) {
   const key = `${track.id}|${windDeg.toFixed(1)}|${origin.lat.toFixed(5)}|${origin.lon.toFixed(5)}`;
   const cached = _courseProgressCache.get(key);
   if (cached) return cached;
   const raw = getWindProgress(track, windDeg, origin);
   const n = raw.length;
-  // Boxcar-smooth ±15 samples (~30 s at 1 Hz). Removes tack/gybe noise.
   const smooth = new Float64Array(n);
-  const halfW = 15;
   for (let i = 0; i < n; i++) {
-    const lo = Math.max(0, i - halfW), hi = Math.min(n - 1, i + halfW);
+    const lo = Math.max(0, i - SMOOTH_HALF_W), hi = Math.min(n - 1, i + SMOOTH_HALF_W);
     let sum = 0;
     for (let j = lo; j <= hi; j++) sum += raw[j];
     smooth[i] = sum / (hi - lo + 1);
   }
   const cum = new Float64Array(n);
+  let legStartVal = smooth[0];
+  let legPeakVal = smooth[0];
+  let legDir = 0; // 0 = undetermined, 1 = upwind, -1 = downwind
+  let cumLegs = 0;
+  let runningMaxInLeg = 0;
   for (let i = 1; i < n; i++) {
-    cum[i] = cum[i - 1] + Math.abs(smooth[i] - smooth[i - 1]);
+    const v = smooth[i];
+    if (legDir === 0) {
+      if (Math.abs(v - legStartVal) > 20) {
+        legDir = v > legStartVal ? 1 : -1;
+        legPeakVal = v;
+      }
+    } else {
+      // Track peak (max excursion in legDir).
+      if ((v - legPeakVal) * legDir > 0) legPeakVal = v;
+      runningMaxInLeg = Math.max(runningMaxInLeg, Math.abs(legPeakVal - legStartVal));
+      // Reversal: have we fallen back > HYSTERESIS from the peak?
+      if ((legPeakVal - v) * legDir > LEG_HYSTERESIS_M) {
+        // Commit completed leg.
+        cumLegs += runningMaxInLeg;
+        runningMaxInLeg = 0;
+        legStartVal = legPeakVal;
+        legPeakVal = v;
+        legDir = -legDir;
+      }
+    }
+    cum[i] = cumLegs + runningMaxInLeg;
   }
   _courseProgressCache.set(key, cum);
   return cum;
