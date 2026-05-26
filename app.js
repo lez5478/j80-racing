@@ -4554,28 +4554,36 @@ function renderMatchChip() {
     const fmt = abs < 60
       ? `${abs.toFixed(1)}s`
       : `${Math.floor(abs / 60)}:${String(Math.floor(abs) % 60).padStart(2, "0")}`;
+    const suffix = r.official ? " (final)" : "";
     if (abs < 1) {
       gapEl.className = "mc-gap even";
-      gapEl.textContent = "level";
+      gapEl.textContent = r.official ? `tied${suffix}` : "level";
     } else if (r.gapSec > 0) {
       gapEl.className = "mc-gap ahead";
-      gapEl.textContent = `+${fmt} ahead`;
+      gapEl.textContent = `+${fmt} ahead${suffix}`;
     } else {
       gapEl.className = "mc-gap behind";
-      gapEl.textContent = `−${fmt} behind`;
+      gapEl.textContent = `−${fmt} behind${suffix}`;
     }
   }
-  // Lateral chip: which side of the rhumb is the selected boat on?
-  let lateralStr = "";
-  if (r.lateralM != null && isFinite(r.lateralM)) {
-    const m = Math.abs(r.lateralM);
-    if (m < 20) lateralStr = "centred";
-    else lateralStr = `${Math.round(m)} m ${r.lateralM > 0 ? "right" : "left"} of rhumb`;
+  // Bottom hint: lateral position + leg label, or "official result" when frozen.
+  let hint;
+  if (r.official) {
+    hint = rivals.length > 1
+      ? `official result · tap · ${matchChipRivalIdx + 1}/${rivals.length}`
+      : "official result";
+  } else {
+    let lateralStr = "";
+    if (r.lateralM != null && isFinite(r.lateralM)) {
+      const m = Math.abs(r.lateralM);
+      lateralStr = m < 20 ? "centred"
+                : `${Math.round(m)} m ${r.lateralM > 0 ? "right" : "left"} of rhumb`;
+    }
+    const legStr = r.legSign === -1 ? "downwind leg" : "upwind leg";
+    hint = rivals.length > 1
+      ? `${legStr} · ${lateralStr} · tap · ${matchChipRivalIdx + 1}/${rivals.length}`
+      : `${legStr} · ${lateralStr}`;
   }
-  const legStr = r.legSign === -1 ? "downwind leg" : "upwind leg";
-  const hint = rivals.length > 1
-    ? `${legStr} · ${lateralStr} · tap · ${matchChipRivalIdx + 1}/${rivals.length}`
-    : `${legStr} · ${lateralStr}`;
   matchChipEl.querySelector(".mc-hint").textContent = hint;
 }
 matchChipEl?.addEventListener("click", () => {
@@ -4657,8 +4665,45 @@ function _idxAtTime(track, t) {
 // Leg sign auto-detected from recent wind-axis velocity of both boats.
 // Lateral offset = projection of selected boat onto axis perpendicular
 // to wind (positive = right of rhumb when looking upwind).
+// Look up a track's OFFICIAL elapsed time from the committee-boat results
+// (race.finishers from race-results/races.js). Returns seconds elapsed
+// since the gun, or null if the boat didn't finish / no result yet.
+function officialFinishElapsed(track) {
+  const race = track.meta?.race;
+  if (!race?.finishers || !track.meta?.boat) return null;
+  const names = window.BOAT_NAMES || {};
+  const fin = race.finishers.find((f) => names[f.sail] === track.meta.boat);
+  if (!fin?.elapsed) return null;
+  const parts = String(fin.elapsed).split(":").map(Number);
+  if (parts.length !== 3 || !parts.every(Number.isFinite)) return null;
+  return parts[0] * 3600 + parts[1] * 60 + parts[2];
+}
+
 function liveTimeGap(trackA, trackB, atSec, windDeg, origin) {
   if (!trackA?.points?.length || !trackB?.points?.length) return null;
+  // ---------- Frozen post-finish gap from committee results ----------
+  // Once BOTH boats have crossed the line per the official elapsed times,
+  // lock the gap to (trailing.elapsed − leading.elapsed). No more live
+  // re-projection, no drift from extra metres sailed celebrating.
+  const elA = officialFinishElapsed(trackA);
+  const elB = officialFinishElapsed(trackB);
+  const raceStartSec = trackA.meta?.race?.start
+    ? Date.parse(trackA.meta.race.start) / 1000 : null;
+  if (elA != null && elB != null && raceStartSec != null) {
+    const finA = raceStartSec + elA;
+    const finB = raceStartSec + elB;
+    if (atSec >= Math.max(finA, finB)) {
+      const gap = elB - elA; // positive = A finished sooner / ahead
+      return {
+        gapSec: gap,
+        leader: gap > 0 ? (trackA.meta?.boat || trackA.name)
+                        : (trackB.meta?.boat || trackB.name),
+        lateralM: null,
+        legSign: 0,
+        official: true,
+      };
+    }
+  }
   if (windDeg == null || !origin) return null;
   const aT = Math.max(trackA.tStart, Math.min(trackA.tEnd, atSec));
   const bT = Math.max(trackB.tStart, Math.min(trackB.tEnd, atSec));
