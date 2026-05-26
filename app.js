@@ -3611,6 +3611,7 @@ function updateBoatsToRaceTime(t) {
   renderWindGrid();
   tickGhosts();
   refreshStartCountdown();
+  renderMatchChip();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap();
   renderStartLineSourcePicker();
   renderCanonicalStartLine();
@@ -4511,6 +4512,103 @@ function polarPlotData(points, windAtBoatFn) {
 // compute boat A's distance from a chosen reference (the first mark or
 // the start) and find when boat B reached that same distance. The gap is
 // (t_B − t_A) seconds, positive = A ahead.
+// ---------- Live match-race chip (top of map) ----------
+let matchChipRivalIdx = 0;
+const matchChipEl = document.getElementById("matchChip");
+function rivalsForMatch(myTrack) {
+  return tracks.filter((t) =>
+    !t.removed && t.visible && t.id !== myTrack.id &&
+    t.meta?.race?.name === myTrack.meta?.race?.name &&
+    t.meta?.boat !== myTrack.meta?.boat);
+}
+function renderMatchChip() {
+  if (selectedTrackId == null || raceTime == null) {
+    matchChipEl.classList.remove("live");
+    return;
+  }
+  const me = tracks[selectedTrackId];
+  if (!me || me.removed) { matchChipEl.classList.remove("live"); return; }
+  const rivals = rivalsForMatch(me);
+  if (!rivals.length) { matchChipEl.classList.remove("live"); return; }
+  matchChipRivalIdx = ((matchChipRivalIdx % rivals.length) + rivals.length) % rivals.length;
+  const rival = rivals[matchChipRivalIdx];
+  const r = liveTimeGap(me, rival, raceTime);
+  if (!r) { matchChipEl.classList.remove("live"); return; }
+  matchChipEl.classList.add("live");
+  matchChipEl.querySelector(".mc-me").textContent = me.meta?.boat || me.name;
+  matchChipEl.querySelector(".mc-rival").textContent = rival.meta?.boat || rival.name;
+  const gapEl = matchChipEl.querySelector(".mc-gap");
+  const abs = Math.abs(r.gapSec);
+  if (abs < 1) {
+    gapEl.className = "mc-gap even";
+    gapEl.textContent = "level";
+  } else if (r.gapSec > 0) {
+    gapEl.className = "mc-gap ahead";
+    gapEl.textContent = `+${abs < 60 ? abs.toFixed(1) + "s" : Math.floor(abs / 60) + ":" + String(Math.floor(abs) % 60).padStart(2, "0")} ahead`;
+  } else {
+    gapEl.className = "mc-gap behind";
+    gapEl.textContent = `−${abs < 60 ? abs.toFixed(1) + "s" : Math.floor(abs / 60) + ":" + String(Math.floor(abs) % 60).padStart(2, "0")} behind`;
+  }
+  const hint = rivals.length > 1 ? `tap · rival ${matchChipRivalIdx + 1}/${rivals.length}` : "";
+  matchChipEl.querySelector(".mc-hint").textContent = hint;
+}
+matchChipEl?.addEventListener("click", () => {
+  matchChipRivalIdx++;
+  renderMatchChip();
+});
+
+// Live single-value time gap between two boats at one instant of race time.
+// Uses each boat's cumulative-distance-along-track (cumDist) as the
+// progress metric: if A has covered more ground than B at time t, A is
+// "ahead". To convert metres into seconds, look back through A's history
+// to find when A had B's current distance — that delta is the gap.
+//
+// Returns { gapSec, leader } where:
+//   gapSec > 0  → trackA leads trackB by gapSec seconds
+//   gapSec < 0  → trackA trails trackB
+//   leader is the name of the leading boat.
+function liveTimeGap(trackA, trackB, atSec) {
+  if (!trackA?.points?.length || !trackB?.points?.length) return null;
+  const aT = Math.max(trackA.tStart, Math.min(trackA.tEnd, atSec));
+  const bT = Math.max(trackB.tStart, Math.min(trackB.tEnd, atSec));
+  const idxAt = (track, t) => {
+    let lo = 0, hi = track.points.length - 1;
+    while (lo + 1 < hi) {
+      const mid = (lo + hi) >> 1;
+      if (track.points[mid].t <= t) lo = mid; else hi = mid;
+    }
+    return lo;
+  };
+  const iA = idxAt(trackA, aT);
+  const iB = idxAt(trackB, bT);
+  const dA = trackA.cumDist[iA];
+  const dB = trackB.cumDist[iB];
+  if (Math.abs(dA - dB) < 1) return { gapSec: 0, leader: null };
+  // Whichever boat has gone farther is the leader. Find when the trailing
+  // boat was at the leader's current cumDist (or, equivalently, when the
+  // leader was at the trailing boat's current cumDist).
+  const lead = dA > dB ? trackA : trackB;
+  const trail = dA > dB ? trackB : trackA;
+  const trailDist = dA > dB ? dB : dA;
+  // Find earliest index where lead.cumDist >= trailDist — that's when the
+  // leader matched the trailing boat's CURRENT progress.
+  const cum = lead.cumDist;
+  let lo = 0, hi = cum.length - 1;
+  while (lo + 1 < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] < trailDist) lo = mid; else hi = mid;
+  }
+  const leadTimeAtTrailDist = lead.points[hi]?.t ?? lead.tStart;
+  const trailTimeNow = trail === trackA ? aT : bT;
+  const gapAbs = trailTimeNow - leadTimeAtTrailDist;
+  // Sign convention: positive = trackA ahead.
+  const signed = (lead === trackA) ? gapAbs : -gapAbs;
+  return {
+    gapSec: signed,
+    leader: lead.meta?.boat || lead.name,
+  };
+}
+
 function timeGapSeries(trackA, trackB, refLatLng) {
   const t0 = Math.max(trackA.tStart, trackB.tStart);
   const t1 = Math.min(trackA.tEnd, trackB.tEnd);

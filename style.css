@@ -405,6 +405,23 @@ body.mark-edit-mode .leaflet-container,
 body.mark-edit-mode .leaflet-interactive { cursor: crosshair !important; }
 body.start-line-edit-mode .leaflet-container { cursor: pointer !important; }
 body.finish-line-edit-mode .leaflet-container { cursor: crosshair !important; }
+#matchChip {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  background: rgba(14, 26, 43, 0.92);
+  border: 1px solid #2a4263; border-radius: 8px;
+  padding: 6px 12px; z-index: 600;
+  font: 13px/1.2 -apple-system, system-ui, sans-serif;
+  color: #dde7f3; display: none; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  max-width: 80vw;
+}
+#matchChip.live { display: block; }
+#matchChip .mc-boats { font-size: 11px; color: #8fb3df; }
+#matchChip .mc-gap { font-size: 18px; font-weight: 700; line-height: 1; margin-top: 2px; letter-spacing: -0.5px; }
+#matchChip .mc-gap.ahead  { color: #22c55e; }
+#matchChip .mc-gap.behind { color: #ef4444; }
+#matchChip .mc-gap.even   { color: #facc15; }
+#matchChip .mc-hint { font-size: 10px; color: #6f8aa8; margin-top: 2px; }
 .boat-icon.data-gap { opacity: 0.55; }
 .boat-icon.data-gap::after {
   content: "⚠";
