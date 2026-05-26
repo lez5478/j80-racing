@@ -4605,6 +4605,39 @@ function getWindProgress(track, windDeg, origin) {
   _windProgressCache.set(key, arr);
   return arr;
 }
+
+// MONOTONIC course progress: cumulative absolute wind-axis change of a
+// smoothed projection. Smoothing filters out the small wind-axis
+// reversals from tacks/gybes so the number tracks the boat's progress
+// along the actual course — climbing the ladder on a beat, descending
+// it on a run, climbing again on the next beat. After rounding a mark
+// the metric keeps rising, so the leader stays ahead even though their
+// raw wind-axis projection is now decreasing (downwind) while trailing
+// boats' are still increasing (still beating).
+const _courseProgressCache = new Map();
+function getCourseProgress(track, windDeg, origin) {
+  const key = `${track.id}|${windDeg.toFixed(1)}|${origin.lat.toFixed(5)}|${origin.lon.toFixed(5)}`;
+  const cached = _courseProgressCache.get(key);
+  if (cached) return cached;
+  const raw = getWindProgress(track, windDeg, origin);
+  const n = raw.length;
+  // Boxcar-smooth ±15 samples (~30 s at 1 Hz). Removes tack/gybe noise.
+  const smooth = new Float64Array(n);
+  const halfW = 15;
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - halfW), hi = Math.min(n - 1, i + halfW);
+    let sum = 0;
+    for (let j = lo; j <= hi; j++) sum += raw[j];
+    smooth[i] = sum / (hi - lo + 1);
+  }
+  const cum = new Float64Array(n);
+  for (let i = 1; i < n; i++) {
+    cum[i] = cum[i - 1] + Math.abs(smooth[i] - smooth[i - 1]);
+  }
+  _courseProgressCache.set(key, cum);
+  return cum;
+}
+
 function _idxAtTime(track, t) {
   let lo = 0, hi = track.points.length - 1;
   while (lo + 1 < hi) {
@@ -4629,24 +4662,19 @@ function liveTimeGap(trackA, trackB, atSec, windDeg, origin) {
   if (windDeg == null || !origin) return null;
   const aT = Math.max(trackA.tStart, Math.min(trackA.tEnd, atSec));
   const bT = Math.max(trackB.tStart, Math.min(trackB.tEnd, atSec));
-  const progA = getWindProgress(trackA, windDeg, origin);
-  const progB = getWindProgress(trackB, windDeg, origin);
+  const courseA = getCourseProgress(trackA, windDeg, origin);
+  const courseB = getCourseProgress(trackB, windDeg, origin);
+  const rawA = getWindProgress(trackA, windDeg, origin);
   const iA = _idxAtTime(trackA, aT);
   const iB = _idxAtTime(trackB, bT);
-  // Determine leg direction from wind-axis velocity over the last 30 s
-  // — positive = going upwind, negative = downwind.
+  // Leg sign for the selected boat (display only): direction of recent
+  // raw wind-axis motion. Positive = upwind, negative = downwind.
   const back = 30;
   const iAprev = _idxAtTime(trackA, Math.max(trackA.tStart, aT - back));
-  const iBprev = _idxAtTime(trackB, Math.max(trackB.tStart, bT - back));
   const dtA = Math.max(1, aT - trackA.points[iAprev].t);
-  const dtB = Math.max(1, bT - trackB.points[iBprev].t);
-  const vA = (progA[iA] - progA[iAprev]) / dtA;
-  const vB = (progB[iB] - progB[iBprev]) / dtB;
-  const sign = (vA + vB) >= 0 ? 1 : -1;
-  const adjA = progA[iA] * sign;
-  const adjB = progB[iB] * sign;
-  // Lateral offset of trackA: project onto perpendicular (rotate wind
-  // vector -90° = right side when looking upwind).
+  const vA = (rawA[iA] - rawA[iAprev]) / dtA;
+  const sign = vA >= 0 ? 1 : -1;
+  // Lateral offset of trackA from the rhumb through origin along wind axis.
   const windRad = windDeg * Math.PI / 180;
   const perpE = Math.cos(windRad), perpN = -Math.sin(windRad);
   const pA = trackA.points[iA];
@@ -4655,23 +4683,26 @@ function liveTimeGap(trackA, trackB, atSec, windDeg, origin) {
   const dE = (pA.lon - origin.lon) * mLon;
   const dN = (pA.lat - origin.lat) * mLat;
   const lateralM = dE * perpE + dN * perpN;
-  if (Math.abs(adjA - adjB) < 1) {
+  // Time gap from monotonic course progress (handles leg transitions).
+  const cA = courseA[iA];
+  const cB = courseB[iB];
+  if (Math.abs(cA - cB) < 1) {
     return { gapSec: 0, leader: null, lateralM, legSign: sign };
   }
-  const lead = adjA > adjB ? trackA : trackB;
-  const leadProg = adjA > adjB ? progA : progB;
-  const trail = adjA > adjB ? trackB : trackA;
-  const trailAdj = adjA > adjB ? adjB : adjA;
-  // Walk lead's history backward until its adjusted progress dips below
-  // the trailing boat's CURRENT progress. Interpolate for sub-step
-  // resolution.
+  const lead = cA > cB ? trackA : trackB;
+  const leadCourse = cA > cB ? courseA : courseB;
+  const trail = cA > cB ? trackB : trackA;
+  const trailNow = cA > cB ? cB : cA;
+  // Course progress is monotonic → walk lead's history backward until
+  // it drops below the trailing boat's CURRENT course progress. Linear
+  // interpolate for sub-step resolution.
   const leadIdxNow = lead === trackA ? iA : iB;
   let crossT = null;
   for (let j = leadIdxNow; j > 0; j--) {
-    if (leadProg[j] * sign < trailAdj) {
-      const p0 = leadProg[j] * sign, p1 = leadProg[j + 1] * sign;
+    if (leadCourse[j] < trailNow) {
+      const p0 = leadCourse[j], p1 = leadCourse[j + 1];
       const t0 = lead.points[j].t, t1 = lead.points[j + 1].t;
-      const frac = p1 === p0 ? 0 : (trailAdj - p0) / (p1 - p0);
+      const frac = p1 === p0 ? 0 : (trailNow - p0) / (p1 - p0);
       crossT = t0 + (t1 - t0) * frac;
       break;
     }
@@ -5168,6 +5199,8 @@ function clearTracks() {
   canonicalStartLineLayer.clearLayers();
   ladderRungsLayer.clearLayers();
   perBoatStartGraphics.clear();
+  _windProgressCache?.clear?.();
+  _courseProgressCache?.clear?.();
   lastRenderedMarksRace = null;
   lastRenderedFinishRace = null;
   renderTrackLegend();
