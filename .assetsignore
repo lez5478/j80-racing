@@ -19,6 +19,11 @@ wind/scan-text.js
 wind/build-stations.js
 wind/build.js
 wind/register-task.ps1
+sync-to-r2.js
+sync-wind-to-r2.js
+what-is-new.js
+tests/
+.github/
 
 # Manifests / lockfiles / configs the browser doesn't need.
 package.json
@@ -30,6 +35,7 @@ wrangler.jsonc
 
 # Raw data inputs (if any accidentally stay in the repo).
 Sail records/
+Different format sail/
 race-results/20*/
 wind/text/
 wind/barbs/

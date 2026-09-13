@@ -1,67 +1,75 @@
-# Cloud setup — shared fleet folder via Dropbox
+# Cloud setup
 
-Each fleet member drops their VTK files into one shared Dropbox folder. The
-app reads them off your local Dropbox-synced copy, so it stays fast and
-works offline. New uploads appear after a re-scan (run `node scan-records.js`
-or just relaunch with `node start.cjs`).
+The app runs as one Cloudflare Worker (`j80-racing`, see `wrangler.jsonc`)
+that serves the static files and a small API, backed by the R2 bucket
+`sail-records`.
 
-## One-time setup (you, the fleet admin)
+- Live site: https://j80-racing.yafo78.workers.dev
+- Track files are also served straight from the bucket's public URL
+  (`R2_BASE_URL` in `app.js`).
 
-1. **Create the Dropbox folder.** In Dropbox web or the desktop app, make a
-   shared folder named e.g. **`RHKYC J80 Race Tracks`**.
-2. **Pre-create per-boat subfolders** inside it: `Meltemi/`, `Jammin'/`,
-   `Jelignite/`, etc. (Skippers will fill in date subfolders themselves.)
-3. **Invite participants** via Dropbox's "Share folder" → email or link.
-   Give them **edit** permission so they can upload, but **viewer** on the
-   parent folder if you don't want them rearranging boats.
-4. **Install Dropbox desktop** on the machine that runs the app, sign in,
-   and let the shared folder sync to disk. By default it lives somewhere
-   like `C:\Users\<you>\Dropbox\RHKYC J80 Race Tracks`.
-5. **Symlink it into the app.** From an elevated PowerShell (run as admin):
+## How changes reach the site
 
-   ```powershell
-   cd "C:\Users\YaFo\Documents\Claude projects\Sailing"
-   Remove-Item "Sail records" -Recurse -Force   # only if the folder already exists locally
-   New-Item -ItemType SymbolicLink -Path "Sail records" `
-     -Value "C:\Users\YaFo\Dropbox\RHKYC J80 Race Tracks"
-   ```
+| What | How it updates |
+| --- | --- |
+| Code (`app.js`, `_worker.js`, …) | Push to `main` → Cloudflare **Workers Builds** deploys automatically. |
+| Race results (`race-results/races.js`) | GitHub Action `refresh-races.yml` runs every Monday 08:00 HKT (or by hand), re-parses the RHKYC PDFs and pushes → auto-deploy. |
+| Fleet tracks | Skippers upload on `/upload.html` → R2 `<Boat>/<YYYY-MM-DD>/<file>`. Visible on the next page load via `/api/records`. |
+| HKO wind | Worker cron, every hour: archives the HKO text snapshot to R2 `wind-text/<date>/<HH>.txt` and merges it into `timeseries.json` (served by `/api/wind`). |
 
-   Now `Sail records/` *is* the Dropbox folder. The http-server serves files
-   through the symlink transparently, so the browser fetches work as before.
+## Secrets
 
-## What participants do (one-time per skipper)
+Set in the Cloudflare dashboard (Worker → Settings → Variables and Secrets)
+or with `npx wrangler secret put <NAME>`:
 
-1. Accept the Dropbox invite. Install Dropbox desktop (or use the web).
-2. After a race, drop their `SESSION_*.VTK` files into:
+- `UPLOAD_TOKEN` — the **fleet upload code**. Share it with skippers; the
+  upload page asks for it once and remembers it. If unset, uploads are open
+  to anyone.
+- `ADMIN_TOKEN` — for `admin-marks.html` and the wind maintenance endpoints
+  below. If unset, those endpoints are disabled.
 
-   ```
-   <BoatName>/<YYYY-MM-DD>/SESSION_<n>.VTK
-   ```
+Uploads never overwrite: re-sending the identical file is a no-op, and a
+different file under an existing name is refused (409).
 
-   …matching the date format the Velocitek device already uses.
-3. They never touch the app.
+## API
 
-## What happens when you launch
+| Endpoint | Access | Purpose |
+| --- | --- | --- |
+| `GET /api/records` | public | `{ Boat: { date: [path, …] } }` listing of R2 tracks |
+| `POST /api/upload` | fleet code | multipart `boat`, `date`, `filename`, `file` (VTK/GPX/TCX/FIT/CSV, ≤ 30 MB) |
+| `GET /api/wind` | public | aggregated hourly HKO wind |
+| `GET /api/marks?date=` / `POST /api/marks` | public | canonical marks / submit a proposal |
+| `GET /api/marks-history`, `POST /api/marks-promote` | admin | review and promote mark proposals |
+| `GET /api/refresh-wind?hours=24` | admin | pull the last N (≤ 48) HKO hours now |
+| `GET /api/rebuild-wind?from=&to=` | admin | re-merge archived snapshots for ≤ 14 days |
+| `POST /api/upload-wind-text` | admin | push one historical snapshot (`date`, `hour`, `file`) |
 
-`node start.cjs` does this on every run:
-- `npm install` first time only
-- `scan-records.js` walks `Sail records/` and refreshes `records.js`
-- `race-results/fetch.js` pulls any new RHKYC PDFs (skip with `--offline`)
-- `race-results/parse.js` re-parses all PDFs into `races.js`
-- `npx http-server` on port 5174
+Admin calls send the token in the `x-admin-token` header, e.g.
 
-So the moment a participant's file finishes syncing, your next launch
-picks it up and the boat appears alongside Meltemi for that race.
+```bash
+curl -H "x-admin-token: $ADMIN_TOKEN" "https://j80-racing.yafo78.workers.dev/api/rebuild-wind?from=2026-06-02&to=2026-06-15"
+```
+
+## Local scripts
+
+- `node start.cjs` — local-only mode: scans `Sail records/`, refreshes race
+  results and serves the folder on http://127.0.0.1:5174 (no Worker API;
+  the app falls back to `records.js`).
+- `npx wrangler dev --local --test-scheduled --persist-to ../.wrangler-sailing-state`
+  — run the Worker locally (also the `worker` entry in `.claude/launch.json`).
+  Keep `--persist-to` outside the project: the Worker serves the project
+  folder as static assets, and state written inside it makes wrangler
+  reload in a loop. Trigger the cron with `curl http://localhost:8787/__scheduled`.
+- `UPLOAD_TOKEN=… node sync-to-r2.js` — push local `Sail records/` VTKs that R2 lacks.
+- `ADMIN_TOKEN=… node sync-wind-to-r2.js` — push local `wind/text/` snapshots and merge them.
+- `node what-is-new.js` — list tracks in R2 that aren't in your local folder.
+- `npm test` — unit tests for the track parsers and match-race metrics.
 
 ## Troubleshooting
 
-- **A participant's track doesn't show up.** Confirm Dropbox finished
-  syncing (check the system tray icon) and the file lives at
-  `<Boat>/YYYY-MM-DD/SESSION_*.VTK`. Re-run `node scan-records.js` and
-  hard-refresh the browser.
-- **The day appears but no boat plays.** The race only renders if a
-  participant's track overlaps the race window. If their device wasn't
-  recording at the start time, you'll see them in the scoreboard but not
-  on the map.
-- **Storage limit.** Free Dropbox is 2 GB; one VTK is ~1 MB so you have
-  headroom for ~2,000 sessions. Plus is 2 TB at ~$10/month if you scale.
+- **A track doesn't show up.** The file must be under
+  `<Boat>/<YYYY-MM-DD>/` for a date that has RHKYC results, and the
+  recording must overlap the race window.
+- **Wind data looks stale.** Check `/api/wind` for the latest date and the
+  Worker's cron logs. Hours still in R2 can be re-merged with
+  `/api/rebuild-wind`; HKO itself only keeps the last 24 hours.
