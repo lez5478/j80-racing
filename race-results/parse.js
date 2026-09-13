@@ -13,7 +13,6 @@
 
 const fs = require("fs");
 const path = require("path");
-const pdfParse = require("pdf-parse");
 
 const ROOT = __dirname;
 const HKT_OFFSET_MIN = 8 * 60; // Hong Kong is UTC+8 year-round
@@ -66,10 +65,13 @@ function parseText(text, sourceName) {
   const titleRe = /^(.+?)\s+\((\d{2})\/(\d{2})\/(\d{4})\)\s*-/;
   const tsRe = /Timestamp:\s*(\d{2}):(\d{2}):(\d{2})\s+(\d{2})\/(\d{2})\/(\d{4})/;
   const startRe = /^\s*J\/80\s*Start:\s*(\d{1,2}):(\d{2})/;
-  // place / sail / (text) / finish HH:MM:SS / elapsed HH:MM:SS / points
-  const finRe = /^(\d{1,3})(HKG\d{3,5}).*?(\d{1,2}):(\d{2}):(\d{2})(\d{1,2}):(\d{2}):(\d{2})\d+\s*$/;
-  // DNC / DNF / OCS / RDG / DSQ / UFD / BFD / DNS
-  const dnxRe = /^-\s*(DNC|DNF|OCS|RDG|DSQ|UFD|BFD|DNS)(HKG\d{3,5})/i;
+  // place / [penalty code] / sail / (text) / finish HH:MM:SS / elapsed HH:MM:SS / points
+  // Re-issued results come out spaced instead of concatenated, may carry a
+  // penalty code before the sail number and fractional points:
+  //   "5CPP  HKG2230  Deep BlueAnthony NgaiRHKYC  13:49:03  00:41:03   6.5"
+  const finRe = /^(\d{1,3})\s*(?:[A-Z]{2,4}\s*)?(HKG\d{3,5}).*?(\d{1,2}):(\d{2}):(\d{2})\s*(\d{1,2}):(\d{2}):(\d{2})\s*[\d.]+\s*$/;
+  // DNC / DNF / OCS / RDG / DSQ / UFD / BFD / DNS / RET / DNE / NSC
+  const dnxRe = /^-\s*(DNC|DNF|OCS|RDG|DSQ|UFD|BFD|DNS|RET|DNE|NSC)\s*(HKG\d{3,5})/i;
 
   let cur = null;
   let pendingTitle = null; // race name from the title line, e.g. "Frostbite 1"
@@ -146,7 +148,12 @@ function parseText(text, sourceName) {
     });
 }
 
+module.exports = { parseText, parseBoatNames };
+if (require.main !== module) return;
+
 (async () => {
+  // Required here, not at the top, so tests can load parseText without deps.
+  const pdfParse = require("pdf-parse");
   const pdfs = listPdfs(ROOT);
   console.log(`Parsing ${pdfs.length} PDFs…`);
 

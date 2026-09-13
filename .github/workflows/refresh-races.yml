@@ -1,14 +1,17 @@
-# Pulls fresh J/80 race-result PDFs from RHKYC every Monday morning HKT,
+# Pulls fresh J/80 race-result PDFs from RHKYC over race weekends,
 # regenerates race-results/races.js, and commits any changes back to main.
-# Cloudflare Pages auto-redeploys on push, so the new race day shows up in
-# the app a few minutes later. Trigger by hand any time via "Run workflow".
+# Cloudflare Workers Builds redeploys on push, so the new race day shows up
+# in the app a few minutes later. Trigger by hand any time via "Run workflow".
+# Runs with no new results change nothing and make no commit.
 
 name: Refresh races
 
 on:
   schedule:
-    # 00:00 UTC every Monday = 08:00 HKT Monday.
-    - cron: "0 0 * * 1"
+    # 12:00 UTC Saturday = 20:00 HKT, after the day's results are posted.
+    - cron: "0 12 * * 6"
+    # 00:00 UTC Sunday + Monday = 08:00 HKT, to catch late or re-issued results.
+    - cron: "0 0 * * 0,1"
   workflow_dispatch: {}
 
 permissions:
