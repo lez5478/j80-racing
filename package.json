@@ -5,6 +5,7 @@
   "description": "Local-first replay tool for J/80 races at RHKYC, with VTK track parsing, race trimming and OpenSeaMap overlay.",
   "scripts": {
     "start": "node start.cjs",
+    "test": "node --test",
     "fetch": "node race-results/fetch.js",
     "parse": "node race-results/parse.js",
     "scan": "node scan-records.js",

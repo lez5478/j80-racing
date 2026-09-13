@@ -4,8 +4,10 @@
 <meta charset="utf-8" />
 <title>J/80 / J/70 Racing app</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous" />
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css"
+  integrity="sha384-MinO0mNliZ3vwppuPOUnGa+iq619pfMhLVUXfC4LHwSCvF9H+6P/KO4Q7qBOYV5V" crossorigin="anonymous" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -172,15 +174,33 @@
   </select>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="https://unpkg.com/three@0.159.0/build/three.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"
+  integrity="sha384-SYKAG6cglRMN0RVvhNeBY0r3FYKNOJtznwA0v7B5Vp9tr31xAHsZC0DqkQ/pZDmj" crossorigin="anonymous"></script>
+<!-- three.js ships only ES modules since r160: load it as a module and expose
+     the namespace as window.THREE for the 3D view in app.js (which only
+     touches THREE after the user opens 3D, long after this has run). -->
+<script type="importmap">
+{
+  "imports": { "three": "https://unpkg.com/three@0.170.0/build/three.module.min.js" },
+  "integrity": {
+    "https://unpkg.com/three@0.170.0/build/three.module.min.js": "sha384-IDC7sAMAIMB/TZ6dgKKPPAKZ2bXXXP8+FBMBC8cU319eBhKITx+PaalhfDkDNH28"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+window.THREE = THREE;
+</script>
 <script src="wind/lamma.js"></script>
 <script src="wind/timeseries.js"></script>
 <script src="wind/stations.js"></script>
 <script src="records.js"></script>
 <script src="race-results/races.js"></script>
 <script src="fit.js"></script>
+<script src="track-parsers.js"></script>
+<script src="race-metrics.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<title>Upload Velocitek track — J/80 / J/70 Racing</title>
+<title>Upload a track — J/80 / J/70 Racing</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="stylesheet" href="style.css" />
 <style>
@@ -10,7 +10,7 @@
   h1 { color: #dbe7f3; margin: 0 0 4px; }
   .hint { color: #8aa0b6; font-size: 12px; margin: 0 0 24px; }
   label { display: block; color: #b6c6d6; font-size: 12px; margin-bottom: 4px; }
-  select, input[type=text] {
+  select, input[type=text], input[type=password] {
     width: 100%; background: #16263a; color: #dbe7f3;
     border: 1px solid #2d4661; border-radius: 6px;
     padding: 8px 10px; font-size: 14px; margin-bottom: 16px;
@@ -36,48 +36,80 @@
 </head>
 <body>
 <div style="margin-bottom: 16px;"><a class="back" href="/">← Back to replay</a></div>
-<h1>Upload a Velocitek VTK file</h1>
+<h1>Upload a race track</h1>
 <p class="hint">
-  Pick your boat, drag your <code>SESSION_*.VTK</code> file(s) onto the box below. The date is read automatically from the file. Files go straight to the fleet's shared storage; the race-day list on the main page refreshes on the next visit.
+  Pick your boat, then drag your track file(s) onto the box below — Velocitek <code>.VTK</code>, GPX, TCX, Garmin FIT or Vakaros CSV. The date is read automatically from the file. Files go straight to the fleet's shared storage; the race-day list on the main page refreshes on the next visit.
 </p>
 
+<label for="code">Fleet upload code</label>
+<input type="password" id="code" autocomplete="off" placeholder="Ask the fleet captain — remembered in this browser" />
+
 <label for="boat">Boat</label>
-<select id="boat">
-  <option value="Meltemi">Meltemi (HKG2231)</option>
-  <option value="Jammin'">Jammin' (HKG2261)</option>
-  <option value="Unknown Pleasures">Unknown Pleasures (HKG2263)</option>
-  <option value="Deep Blue">Deep Blue (HKG2230)</option>
-  <option value="Footloose">Footloose (HKG2252)</option>
-  <option value="Tigrina">Tigrina (HKG2251)</option>
-  <option value="J Chi">J Chi (HKG2235)</option>
-  <option value="Lila">Lila (HKG2239)</option>
-  <option value="Mozzie">Mozzie (HKG2259)</option>
-  <option value="JKAPPA">JKAPPA (HKG2237)</option>
-  <option value="Jupiter">Jupiter (HKG2587)</option>
-  <option value="JeNa PaBe">JeNa PaBe (HKG2253)</option>
-  <option value="Simplicity Jr.">Simplicity Jr. (HKG2256)</option>
-  <option value="Javelin">Javelin (HKG1529)</option>
-  <option value="Poiema">Poiema (HKG2265)</option>
-  <option value="Levity">Levity (HKG2267)</option>
-  <option value="Alchemist">Alchemist (HKG2262)</option>
-  <option value="Jahoo">Jahoo (HKG1530)</option>
-  <option value="Invictus">Invictus (HKG2236)</option>
-  <option value="Jelignite">Jelignite (HKG1428)</option>
-</select>
+<select id="boat"></select>
+<input type="text" id="otherBoat" placeholder="Boat name (letters, numbers, spaces)" maxlength="32" hidden />
 
 <div id="drop">
-  <strong>Drop VTK files here</strong><br>or click to pick
+  <strong>Drop track files here</strong><br>or click to pick
   <input type="file" id="pickFiles" accept=".vtk,.VTK,.gpx,.GPX,.tcx,.TCX,.fit,.FIT,.csv,.CSV" multiple hidden>
 </div>
 
 <div id="log"></div>
 
+<script src="race-results/races.js"></script>
 <script src="fit.js"></script>
 <script>
 const dropEl = document.getElementById("drop");
 const pickEl = document.getElementById("pickFiles");
 const logEl = document.getElementById("log");
 const boatEl = document.getElementById("boat");
+const otherBoatEl = document.getElementById("otherBoat");
+const codeEl = document.getElementById("code");
+
+const LS_CODE = "sailing.uploadCode";
+const LS_BOAT = "sailing.uploadBoat";
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } }
+
+// R2 folder names only allow [A-Za-z0-9 '._-] (see BOAT_RE in _worker.js),
+// so curly apostrophes become straight ones and anything else is dropped —
+// matching the existing folders (e.g. "Jammin'").
+function folderName(name) {
+  return name.replace(/[‘’]/g, "'").replace(/[^A-Za-z0-9 '._-]/g, "").replace(/\s+/g, " ").trim().slice(0, 32);
+}
+
+// Roster comes from the race results (race-results/races.js), so new boats
+// show up here as soon as they appear in an RHKYC results PDF.
+function populateBoats() {
+  const names = window.BOAT_NAMES || {};
+  const boats = Object.entries(names)
+    .map(([sail, name]) => ({ sail, name, folder: folderName(name) }))
+    .filter((b) => b.folder)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const b of boats) {
+    const opt = document.createElement("option");
+    opt.value = b.folder;
+    opt.textContent = `${b.name} (${b.sail})`;
+    boatEl.appendChild(opt);
+  }
+  const other = document.createElement("option");
+  other.value = "";
+  other.textContent = "Other boat…";
+  boatEl.appendChild(other);
+  const saved = lsGet(LS_BOAT);
+  if (saved && boats.some((b) => b.folder === saved)) boatEl.value = saved;
+  else if (saved) { boatEl.value = ""; otherBoatEl.value = saved; }
+  otherBoatEl.hidden = boatEl.value !== "";
+}
+populateBoats();
+boatEl.addEventListener("change", () => {
+  otherBoatEl.hidden = boatEl.value !== "";
+  if (!otherBoatEl.hidden) otherBoatEl.focus();
+});
+codeEl.value = lsGet(LS_CODE) || "";
+
+function selectedBoat() {
+  return boatEl.value || folderName(otherBoatEl.value);
+}
 
 function log(msg, cls = "") {
   const row = document.createElement("div");
@@ -161,9 +193,8 @@ async function dateFromFile(file) {
   return null;
 }
 
-async function uploadOne(file) {
+async function uploadOne(file, boat) {
   const row = log(`${file.name} …`, "progress");
-  const boat = boatEl.value;
   let date;
   try { date = await dateFromFile(file); }
   catch (e) { row.className = "row-log err"; row.textContent = `${file.name} — couldn't read date: ${e.message}`; return; }
@@ -178,11 +209,15 @@ async function uploadOne(file) {
   fd.append("file", file);
 
   try {
-    const r = await fetch("/api/upload", { method: "POST", body: fd });
+    const r = await fetch("/api/upload", {
+      method: "POST", body: fd, headers: { "x-upload-token": codeEl.value.trim() },
+    });
     const data = await r.json();
     if (r.ok) {
       row.className = "row-log ok";
-      row.textContent = `✓ ${boat} / ${date} / ${file.name}  (${(file.size/1024).toFixed(0)} KB)`;
+      row.textContent = data.duplicate
+        ? `✓ ${boat} / ${date} / ${file.name} — already uploaded`
+        : `✓ ${boat} / ${date} / ${file.name}  (${(file.size/1024).toFixed(0)} KB)`;
     } else {
       row.className = "row-log err";
       row.textContent = `✗ ${file.name} — ${data.error || r.statusText}`;
@@ -194,9 +229,13 @@ async function uploadOne(file) {
 }
 
 async function handleFiles(files) {
+  const boat = selectedBoat();
+  if (!boat) { log("Pick your boat (or type its name) first", "err"); return; }
   const supported = [...files].filter((f) => /\.(vtk|gpx|tcx|fit|csv)$/i.test(f.name));
   if (!supported.length) { log("No .VTK / .GPX / .TCX / .FIT / .CSV files", "err"); return; }
-  for (const f of supported) await uploadOne(f);
+  lsSet(LS_BOAT, boat);
+  lsSet(LS_CODE, codeEl.value.trim());
+  for (const f of supported) await uploadOne(f, boat);
 }
 
 dropEl.addEventListener("click", () => pickEl.click());
