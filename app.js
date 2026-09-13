@@ -3893,11 +3893,28 @@ if (exportRow) {
 // ---------- File loading (race-aware) ----------
 // loadFileAsPoints just parses VTK to {boat, points}; the caller decides
 // how to slice into per-race tracks.
-// ---------- GPX / TCX parser ----------
+// ---------- GPX / TCX / FIT parsers ----------
+// Fill sog (knots) + cog (degrees) from adjacent samples (works well at 1 Hz,
+// the typical Garmin rate). A sog the device already recorded (FIT speed) is
+// kept; cog is always derived since these formats rarely carry heading.
+function fillSogCog(points) {
+  const MPS_TO_KN = 1.943844;
+  for (let i = 0; i < points.length; i++) {
+    const a = i === 0 ? points[0] : points[i - 1];
+    const b = i === points.length - 1 ? points[points.length - 1] : points[i + 1];
+    const dLat = (b.lat - a.lat) * 111_320;
+    const dLon = (b.lon - a.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
+    const dist = Math.sqrt(dLat * dLat + dLon * dLon);
+    const dt = Math.max(0.01, b.t - a.t);
+    if (!isFinite(points[i].sog)) points[i].sog = (dist / dt) * MPS_TO_KN;
+    points[i].cog = ((Math.atan2(dLon, dLat) * 180 / Math.PI) + 360) % 360;
+  }
+  return { points, buttons: [] };
+}
+
 // Garmin Connect and many watches export GPS tracks as GPX. Structure is
 // plain XML: <trkpt lat="…" lon="…"><time>…</time></trkpt>. Speed and
-// heading aren't usually included, so we compute them from consecutive
-// samples (works well at 1 Hz which is the typical Garmin rate).
+// heading aren't usually included.
 function parseGPX(text) {
   const points = [];
   const trkptRe = /<trkpt\s+lat="([-\d.]+)"\s+lon="([-\d.]+)"[^>]*>[\s\S]*?<time>([^<]+)<\/time>[\s\S]*?<\/trkpt>/g;
@@ -3907,27 +3924,14 @@ function parseGPX(text) {
     const lon = Number(m[2]);
     const t = Date.parse(m[3]) / 1000;
     if (!isFinite(lat) || !isFinite(lon) || !isFinite(t)) continue;
-    points.push({ t, lat, lon, sog: 0, cog: 0 });
+    points.push({ t, lat, lon });
   }
-  if (points.length < 2) return { points, buttons: [] };
-  // Fill sog (knots) + cog (degrees) from adjacent samples.
-  const MPS_TO_KN = 1.943844;
-  for (let i = 0; i < points.length; i++) {
-    const a = i === 0 ? points[0] : points[i - 1];
-    const b = i === points.length - 1 ? points[points.length - 1] : points[i + 1];
-    const dLat = (b.lat - a.lat) * 111_320;
-    const dLon = (b.lon - a.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
-    const dist = Math.sqrt(dLat * dLat + dLon * dLon);
-    const dt = Math.max(0.01, b.t - a.t);
-    points[i].sog = (dist / dt) * MPS_TO_KN;
-    points[i].cog = ((Math.atan2(dLon, dLat) * 180 / Math.PI) + 360) % 360;
-  }
-  return { points, buttons: [] };
+  return fillSogCog(points);
 }
 
 // TCX (Garmin Training Center) is similar XML with <Trackpoint> wrapping
 // <Time>, <Position><LatitudeDegrees/LongitudeDegrees>, and sometimes
-// <Extensions> carrying speed. Same post-processing for sog/cog.
+// <Extensions> carrying speed.
 function parseTCX(text) {
   const points = [];
   const pointRe = /<Trackpoint>[\s\S]*?<Time>([^<]+)<\/Time>[\s\S]*?<LatitudeDegrees>([-\d.]+)<\/LatitudeDegrees>[\s\S]*?<LongitudeDegrees>([-\d.]+)<\/LongitudeDegrees>[\s\S]*?<\/Trackpoint>/g;
@@ -3937,22 +3941,9 @@ function parseTCX(text) {
     const lat = Number(m[2]);
     const lon = Number(m[3]);
     if (!isFinite(lat) || !isFinite(lon) || !isFinite(t)) continue;
-    points.push({ t, lat, lon, sog: 0, cog: 0 });
+    points.push({ t, lat, lon });
   }
-  // Same sog/cog fill as parseGPX — no duplication for brevity; reuse:
-  if (points.length < 2) return { points, buttons: [] };
-  const MPS_TO_KN = 1.943844;
-  for (let i = 0; i < points.length; i++) {
-    const a = i === 0 ? points[0] : points[i - 1];
-    const b = i === points.length - 1 ? points[points.length - 1] : points[i + 1];
-    const dLat = (b.lat - a.lat) * 111_320;
-    const dLon = (b.lon - a.lon) * 111_320 * Math.cos(((a.lat + b.lat) / 2) * Math.PI / 180);
-    const dist = Math.sqrt(dLat * dLat + dLon * dLon);
-    const dt = Math.max(0.01, b.t - a.t);
-    points[i].sog = (dist / dt) * MPS_TO_KN;
-    points[i].cog = ((Math.atan2(dLon, dLat) * 180 / Math.PI) + 360) % 360;
-  }
-  return { points, buttons: [] };
+  return fillSogCog(points);
 }
 
 // Vakaros (and similar) CSV export. Header form:
@@ -4007,6 +3998,7 @@ function parseVakarosCSV(text) {
 function parseTrackFile(name, bytes) {
   const ext = name.toLowerCase().split(".").pop();
   if (ext === "vtk") return parseVTK(bytes);
+  if (ext === "fit") return fillSogCog(parseFIT(bytes)); // fit.js
   const text = new TextDecoder("utf-8").decode(bytes);
   if (ext === "gpx") return parseGPX(text);
   if (ext === "tcx") return parseTCX(text);
@@ -5231,7 +5223,7 @@ function sliceByTime(points, t0, t1) {
 }
 
 function indexFiles(fileList) {
-  const files = Array.from(fileList).filter((f) => /\.(vtk|gpx|tcx|csv)$/i.test(f.name));
+  const files = Array.from(fileList).filter((f) => /\.(vtk|gpx|tcx|fit|csv)$/i.test(f.name));
   if (!files.length) {
     statusEl.textContent = "No .VTK files found.";
     return;
@@ -5500,7 +5492,7 @@ async function runDemo() {
     // 6. End card.
     showDemoOverlay(
       `<strong>Want to see your boat next to mine?</strong>` +
-      `Drop your VTK / GPX / TCX / Vakaros CSV at` +
+      `Drop your VTK / GPX / TCX / FIT / Vakaros CSV at` +
       `<div class="demo-cta">j80-racing.yafo78.workers.dev/upload</div>`,
     );
     await new Promise((r) => setTimeout(r, 5000));

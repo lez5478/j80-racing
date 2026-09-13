@@ -72,6 +72,7 @@
 
 <div id="log"></div>
 
+<script src="fit.js"></script>
 <script>
 const dropEl = document.getElementById("drop");
 const pickEl = document.getElementById("pickFiles");
@@ -130,17 +131,10 @@ async function dateFromXml(file) {
   return hkDate(sec);
 }
 
-// Read a FIT file's earliest timestamp. FIT is a binary format — we skip
-// the detail and let the server accept it; use the file's lastModified as
-// a fallback date. Fleet members with FIT files can fix by uploading the
-// GPX export instead (Garmin Connect can export both).
-function dateFromFit(file) {
-  const d = new Date(file.lastModified || Date.now());
-  const hk = new Date(d.getTime() + 8 * 3600 * 1000);
-  const y = hk.getUTCFullYear();
-  const m = String(hk.getUTCMonth() + 1).padStart(2, "0");
-  const dd = String(hk.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${dd}`;
+// Read a FIT file's first GPS point timestamp (decoder in fit.js).
+async function dateFromFit(file) {
+  const points = parseFIT(new Uint8Array(await file.arrayBuffer()));
+  return points.length ? hkDate(points[0].t) : null;
 }
 
 // Read the first data row of a CSV to get the timestamp.
