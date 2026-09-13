@@ -73,7 +73,8 @@ function buildMultipart(fields, file) {
   // raw file list — so we can't easily dedup by file. Instead we just push
   // all locals; the Worker's PUT is idempotent.
   let ok = 0, fail = 0;
-  for (const date of fs.readdirSync(LOCAL_ROOT).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))) {
+  const dates = fs.readdirSync(LOCAL_ROOT).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  for (const date of dates) {
     for (const fn of fs.readdirSync(path.join(LOCAL_ROOT, date))) {
       const m = fn.match(/^(\d{2})\.txt$/);
       if (!m) continue;
@@ -92,7 +93,16 @@ function buildMultipart(fields, file) {
     }
   }
   console.log(`\nUploaded ${ok} snapshots, ${fail} failed.`);
-  console.log("\nTriggering aggregate rebuild…");
-  const rebuild = await get(WORKER + "/api/rebuild-wind");
-  console.log("Rebuild:", JSON.stringify(rebuild));
+  // The Worker merges at most 14 days per rebuild call, so walk the
+  // uploaded dates in 14-day windows.
+  console.log("\nMerging uploaded days into the aggregate…");
+  let i = 0;
+  while (i < dates.length) {
+    const from = dates[i];
+    const limit = new Date(Date.parse(from) + 13 * 86400000).toISOString().slice(0, 10);
+    while (i + 1 < dates.length && dates[i + 1] <= limit) i++;
+    const to = dates[i++];
+    const rebuild = await get(`${WORKER}/api/rebuild-wind?from=${from}&to=${to}`);
+    console.log("Rebuild:", JSON.stringify(rebuild));
+  }
 })().catch((e) => { console.error(e); process.exit(1); });

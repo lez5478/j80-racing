@@ -4,8 +4,9 @@
 # Pulled in by `npx wrangler deploy`, contains a 118 MiB binary that breaks upload.
 node_modules/
 
-# Never serve git internals.
+# Never serve git internals or wrangler's local dev state.
 .git/
+.wrangler/
 
 # Node scripts are useful locally but aren't consumed by the browser.
 scan-records.js

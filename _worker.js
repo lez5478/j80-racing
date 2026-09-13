@@ -67,10 +67,13 @@ function parseHkoText(text) {
 function pad(n) { return String(n).padStart(2, "0"); }
 
 // Fetch the HKO snapshot for a specific HKT hour and archive it in R2 if
-// it's not already there. Returns { saved | skipped | missing, key }.
+// it's not already there. Returns { saved | skipped | missing, key }; a
+// saved result also carries date, h and the snapshot text so the caller can
+// merge it without reading it back from R2.
 async function pullWindHour(env, y, m, d, h) {
   const stamp = `${y}${pad(m)}${pad(d)}${pad(h)}0000`;
-  const key = `wind-text/${y}-${pad(m)}-${pad(d)}/${pad(h)}.txt`;
+  const date = `${y}-${pad(m)}-${pad(d)}`;
+  const key = `wind-text/${date}/${pad(h)}.txt`;
   if (await env.SAIL_RECORDS.head(key)) return { skipped: true, key };
   try {
     const r = await fetch(`${HKO_ARCHIVE}${stamp}e.txt`);
@@ -80,57 +83,84 @@ async function pullWindHour(env, y, m, d, h) {
     await env.SAIL_RECORDS.put(key, body, {
       httpMetadata: { contentType: "text/html; charset=utf-8" },
     });
-    return { saved: true, key };
+    return { saved: true, key, date, h, text: new TextDecoder().decode(body) };
   } catch (e) {
     return { missing: true, key, error: String(e) };
   }
 }
 
-// Walk every wind-text/* file in R2 and build a single timeseries JSON:
+// The aggregate lives in timeseries.json at the bucket root:
 //   { stations: { name: name }, hourly: { date: { station: [ {h,dir,deg,spd,gust} ] } } }
-// Also writes timeseries.json at the bucket root for the app to fetch.
-async function rebuildTimeseries(env) {
-  const hourly = {};
-  const stationsSeen = new Set();
-  let cursor;
-  let snapshots = 0;
-  do {
-    const list = await env.SAIL_RECORDS.list({
-      prefix: "wind-text/", cursor, limit: 1000,
-    });
-    for (const obj of list.objects) {
-      const parts = obj.key.split("/"); // wind-text / YYYY-MM-DD / HH.txt
-      if (parts.length !== 3) continue;
-      const date = parts[1];
-      const hm = parts[2].match(/^(\d{2})\.txt$/);
-      if (!DATE_RE.test(date) || !hm) continue;
-      const h = Number(hm[1]);
-      const body = await env.SAIL_RECORDS.get(obj.key);
-      if (!body) continue;
-      const text = await body.text();
-      const rows = parseHkoText(text);
-      if (!rows) continue;
-      snapshots++;
-      if (!hourly[date]) hourly[date] = {};
-      for (const [st, vals] of Object.entries(rows)) {
-        stationsSeen.add(st);
-        if (!hourly[date][st]) hourly[date][st] = [];
-        hourly[date][st].push({ h, ...vals });
-      }
-    }
-    cursor = list.truncated ? list.cursor : null;
-  } while (cursor);
+// It is updated incrementally. Rebuilding it from every wind-text/* file on
+// each run costs one R2 read per snapshot, and once the archive passed ~1000
+// snapshots (early June 2026) that blew the per-invocation subrequest limit,
+// so the cron silently stopped refreshing it.
+async function loadTimeseries(env) {
+  const blob = await env.SAIL_RECORDS.get("timeseries.json");
+  if (!blob) return { stations: {}, hourly: {} };
+  // Let a parse error throw: saving over a corrupt read would wipe history.
+  const agg = JSON.parse(await blob.text());
+  agg.stations = agg.stations || {};
+  agg.hourly = agg.hourly || {};
+  return agg;
+}
 
-  for (const d of Object.keys(hourly)) {
-    for (const s of Object.keys(hourly[d])) hourly[d][s].sort((a, b) => a.h - b.h);
-  }
+async function saveTimeseries(env, agg) {
   const stations = {};
-  for (const s of [...stationsSeen].sort()) stations[s] = s;
-  const out = { stations, hourly };
-  await env.SAIL_RECORDS.put("timeseries.json", JSON.stringify(out), {
+  for (const s of Object.keys(agg.stations).sort()) stations[s] = s;
+  await env.SAIL_RECORDS.put("timeseries.json", JSON.stringify({ stations, hourly: agg.hourly }), {
     httpMetadata: { contentType: "application/json" },
   });
-  return { days: Object.keys(hourly).length, stations: stationsSeen.size, snapshots };
+  return { days: Object.keys(agg.hourly).length, stations: Object.keys(stations).length };
+}
+
+// Merge one hourly snapshot into the aggregate, replacing any existing row
+// for the same station + hour. Returns false if the text didn't parse.
+function mergeSnapshot(agg, date, h, text) {
+  const rows = parseHkoText(text);
+  if (!rows) return false;
+  const day = (agg.hourly[date] = agg.hourly[date] || {});
+  for (const [st, vals] of Object.entries(rows)) {
+    agg.stations[st] = st;
+    const series = (day[st] = day[st] || []);
+    const row = { h, ...vals };
+    const i = series.findIndex((r) => r.h === h);
+    if (i >= 0) series[i] = row;
+    else { series.push(row); series.sort((a, b) => a.h - b.h); }
+  }
+  return true;
+}
+
+// Re-merge every wind-text/<date>/*.txt for dates in [from, to] into the
+// aggregate. Bounded to MAX_REBUILD_DAYS per call (≤ ~25 R2 ops per day) so
+// a backfill stays well inside the subrequest limit — call it in chunks.
+const MAX_REBUILD_DAYS = 14;
+async function rebuildDays(env, from, to) {
+  const dates = [];
+  for (let t = Date.parse(from + "T00:00:00Z"); t <= Date.parse(to + "T00:00:00Z"); t += 86400000) {
+    dates.push(new Date(t).toISOString().slice(0, 10));
+  }
+  const agg = await loadTimeseries(env);
+  let snapshots = 0;
+  for (const date of dates) {
+    const list = await env.SAIL_RECORDS.list({ prefix: `wind-text/${date}/`, limit: 100 });
+    for (const obj of list.objects) {
+      const hm = obj.key.split("/")[2]?.match(/^(\d{2})\.txt$/);
+      if (!hm) continue;
+      const body = await env.SAIL_RECORDS.get(obj.key);
+      if (body && mergeSnapshot(agg, date, Number(hm[1]), await body.text())) snapshots++;
+    }
+  }
+  return { from, to, snapshots, ...(await saveTimeseries(env, agg)) };
+}
+
+// Merge the snapshots a batch of pullWindHour calls just saved.
+async function mergePulled(env, results) {
+  const saved = results.filter((r) => r.saved);
+  if (!saved.length) return null;
+  const agg = await loadTimeseries(env);
+  for (const r of saved) mergeSnapshot(agg, r.date, r.h, r.text);
+  return saveTimeseries(env, agg);
 }
 
 export default {
@@ -226,18 +256,26 @@ export default {
       return json({ ok: true, key });
     }
 
-    // ---------- GET /api/rebuild-wind ----------
-    // Re-aggregate everything in wind-text/ into timeseries.json.
-    // Use after bulk-uploading historical snapshots.
+    // ---------- GET /api/rebuild-wind?from=YYYY-MM-DD&to=YYYY-MM-DD ----------
+    // Re-merge the wind-text/ snapshots for that date range into
+    // timeseries.json (at most MAX_REBUILD_DAYS per call; `to` defaults to
+    // `from`). Use after bulk-uploading historical snapshots.
     if (url.pathname === "/api/rebuild-wind" && request.method === "GET") {
-      const summary = await rebuildTimeseries(env);
-      return json(summary);
+      const from = (url.searchParams.get("from") || "").trim();
+      const to = (url.searchParams.get("to") || from).trim();
+      if (!DATE_RE.test(from) || !DATE_RE.test(to) || to < from) {
+        return json({ error: "need from=YYYY-MM-DD[&to=YYYY-MM-DD]" }, { status: 400 });
+      }
+      const span = (Date.parse(to) - Date.parse(from)) / 86400000 + 1;
+      if (span > MAX_REBUILD_DAYS) {
+        return json({ error: `range too long (max ${MAX_REBUILD_DAYS} days per call)` }, { status: 400 });
+      }
+      return json(await rebuildDays(env, from, to));
     }
 
     // ---------- GET /api/refresh-wind ----------
-    // Manual trigger to pull the last 24h + rebuild. Useful when you add a
-    // new weekend retroactively. Public; no auth — worst case someone
-    // forces a rebuild, which is fine.
+    // Manual trigger to pull the last 24h (max 48) and merge what's new.
+    // Public; no auth — worst case someone forces a refresh, which is fine.
     if (url.pathname === "/api/refresh-wind" && request.method === "GET") {
       const hours = Math.min(48, Math.max(1, Number(url.searchParams.get("hours") || 24)));
       const now = new Date();
@@ -248,7 +286,7 @@ export default {
         results.push(await pullWindHour(env,
           cur.getUTCFullYear(), cur.getUTCMonth() + 1, cur.getUTCDate(), cur.getUTCHours()));
       }
-      const summary = await rebuildTimeseries(env);
+      const summary = await mergePulled(env, results);
       return json({ pulled: results.filter((r) => r.saved).length,
                     skipped: results.filter((r) => r.skipped).length,
                     missing: results.filter((r) => r.missing).length,
@@ -388,10 +426,8 @@ export default {
   },
 
   // Cloudflare runs this on the cron schedule in wrangler.jsonc:
-  //   "0 * * * 6,0"  = every hour on Saturday(6) and Sunday(0) UTC
-  // which in HKT (UTC+8) lines up with:
-  //   Sat 08:00 HKT → Sun 07:00 HKT, and Sun 08:00 HKT → Mon 07:00 HKT
-  // i.e. hourly through both full race days.
+  //   "0 * * * *"  = every hour, every day
+  // so the wind archive has no gaps (HKO itself only keeps 24 hours).
   async scheduled(event, env, ctx) {
     const now = new Date(event.scheduledTime);
     const hk = new Date(now.getTime() + 8 * 3600 * 1000);
@@ -404,11 +440,11 @@ export default {
       results.push(await pullWindHour(env,
         cur.getUTCFullYear(), cur.getUTCMonth() + 1, cur.getUTCDate(), cur.getUTCHours()));
     }
-    const saved = results.filter((r) => r.saved).length;
-    // Only rebuild the big JSON if something new actually landed.
-    if (saved > 0) {
-      const summary = await rebuildTimeseries(env);
-      console.log(`Wind cron: saved ${saved}, timeseries has ${summary.days} days / ${summary.snapshots} snapshots`);
+    // Only rewrite the big JSON if something new actually landed.
+    const summary = await mergePulled(env, results);
+    if (summary) {
+      const saved = results.filter((r) => r.saved).length;
+      console.log(`Wind cron: merged ${saved}, timeseries has ${summary.days} days`);
     } else {
       console.log("Wind cron: no new snapshots");
     }

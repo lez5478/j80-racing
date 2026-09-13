@@ -6,6 +6,13 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["start.cjs"],
       "port": 5174
+    },
+    {
+      "name": "worker",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["wrangler", "dev", "--local", "--test-scheduled", "--port", "8787",
+                      "--persist-to", "../.wrangler-sailing-state"],
+      "port": 8787
     }
   ]
 }
