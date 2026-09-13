@@ -1,8 +1,7 @@
 // Pushes every local VTK that isn't already in R2 up via /api/upload.
-// Run on your laptop:   node sync-to-r2.js
+// Run on your laptop:   UPLOAD_TOKEN=<fleet code> node sync-to-r2.js
 //
-// The endpoint is public (CORS *, no auth) so this works from any machine
-// with an internet connection.
+// UPLOAD_TOKEN is the same fleet upload code the upload page asks for.
 
 const fs = require("fs");
 const path = require("path");
@@ -32,6 +31,7 @@ function httpPost(urlString, boundary, bodyBuf) {
       headers: {
         "content-type": "multipart/form-data; boundary=" + boundary,
         "content-length": bodyBuf.length,
+        "x-upload-token": process.env.UPLOAD_TOKEN || "",
       },
     }, (res) => {
       const chunks = [];

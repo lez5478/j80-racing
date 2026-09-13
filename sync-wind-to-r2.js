@@ -3,7 +3,7 @@
 // timeseries rebuild. Use this once to seed historical days that the
 // cron can't backfill (HKO only keeps 24h).
 //
-//    node sync-wind-to-r2.js
+//    ADMIN_TOKEN=<admin token> node sync-wind-to-r2.js
 
 const fs = require("fs");
 const path = require("path");
@@ -11,10 +11,11 @@ const https = require("https");
 
 const WORKER = "https://j80-racing.yafo78.workers.dev";
 const LOCAL_ROOT = path.join(__dirname, "wind", "text");
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 
 function get(url) {
   return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
+    https.get(url, { headers: { "x-admin-token": ADMIN_TOKEN } }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
@@ -33,6 +34,7 @@ function httpPost(urlString, boundary, body) {
       headers: {
         "content-type": "multipart/form-data; boundary=" + boundary,
         "content-length": body.length,
+        "x-admin-token": ADMIN_TOKEN,
       },
     }, (res) => {
       const chunks = [];
@@ -65,6 +67,10 @@ function buildMultipart(fields, file) {
 }
 
 (async () => {
+  if (!ADMIN_TOKEN) {
+    console.error("Set ADMIN_TOKEN (the Worker's admin secret) — the wind endpoints are admin-only.");
+    process.exit(1);
+  }
   if (!fs.existsSync(LOCAL_ROOT)) {
     console.log("No wind/text/ folder — nothing to sync.");
     return;

@@ -20,15 +20,29 @@ const MAX_BYTES = 30 * 1024 * 1024;
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET, POST, OPTIONS",
-  "access-control-allow-headers": "content-type, x-admin-token",
+  "access-control-allow-headers": "content-type, x-admin-token, x-upload-token",
 };
+
+function safeEqual(a, b) {
+  const enc = new TextEncoder();
+  const x = enc.encode(a), y = enc.encode(b);
+  if (x.byteLength !== y.byteLength) return false;
+  return crypto.subtle.timingSafeEqual(x, y);
+}
 
 // Admin endpoints check this header against the ADMIN_TOKEN secret.
 // Set the secret with: wrangler secret put ADMIN_TOKEN
 function checkAdmin(request, env) {
   if (!env.ADMIN_TOKEN) return false;
-  const tok = request.headers.get("x-admin-token") || "";
-  return tok && tok === env.ADMIN_TOKEN;
+  return safeEqual(request.headers.get("x-admin-token") || "", env.ADMIN_TOKEN);
+}
+
+// Track uploads check x-upload-token against the fleet-wide UPLOAD_TOKEN
+// secret (wrangler secret put UPLOAD_TOKEN). Until that secret is set,
+// uploads stay open so the fleet isn't locked out mid-season.
+function checkUpload(request, env) {
+  if (!env.UPLOAD_TOKEN) return true;
+  return safeEqual(request.headers.get("x-upload-token") || "", env.UPLOAD_TOKEN);
 }
 
 function json(body, init = {}) {
@@ -204,6 +218,7 @@ export default {
 
     // ---------- POST /api/upload ----------
     if (url.pathname === "/api/upload" && request.method === "POST") {
+      if (!checkUpload(request, env)) return json({ error: "Wrong fleet upload code" }, { status: 401 });
       let form;
       try { form = await request.formData(); }
       catch { return json({ error: "Expected multipart/form-data" }, { status: 400 }); }
@@ -220,7 +235,14 @@ export default {
       if (file.size > MAX_BYTES) return json({ error: `File too large (max ${MAX_BYTES / 1024 / 1024} MB)` }, { status: 413 });
       if (file.size < 64) return json({ error: "File too small — not a VTK" }, { status: 400 });
 
+      // Never overwrite someone's track: re-uploading the identical file is
+      // a no-op, a different file under the same name is refused.
       const key = `${boat}/${date}/${filename}`;
+      const existing = await env.SAIL_RECORDS.head(key);
+      if (existing) {
+        if (existing.size === file.size) return json({ ok: true, key, bytes: file.size, duplicate: true });
+        return json({ error: "A different file with this name is already uploaded for that boat and day" }, { status: 409 });
+      }
       try {
         await env.SAIL_RECORDS.put(key, file.stream(), {
           httpMetadata: { contentType: "application/octet-stream" },
@@ -235,8 +257,9 @@ export default {
     // Accepts one wind-text snapshot (one hourly .txt). Used by the local
     // sync script to push historical snapshots that pre-date the cron
     // (HKO only keeps 24h so we can't re-fetch them from their server).
-    //   fields: date (YYYY-MM-DD), hour (0-23), file
+    //   fields: date (YYYY-MM-DD), hour (0-23), file        (admin)
     if (url.pathname === "/api/upload-wind-text" && request.method === "POST") {
+      if (!checkAdmin(request, env)) return json({ error: "unauthorized" }, { status: 401 });
       let form;
       try { form = await request.formData(); }
       catch { return json({ error: "multipart expected" }, { status: 400 }); }
@@ -259,8 +282,9 @@ export default {
     // ---------- GET /api/rebuild-wind?from=YYYY-MM-DD&to=YYYY-MM-DD ----------
     // Re-merge the wind-text/ snapshots for that date range into
     // timeseries.json (at most MAX_REBUILD_DAYS per call; `to` defaults to
-    // `from`). Use after bulk-uploading historical snapshots.
+    // `from`). Use after bulk-uploading historical snapshots.       (admin)
     if (url.pathname === "/api/rebuild-wind" && request.method === "GET") {
+      if (!checkAdmin(request, env)) return json({ error: "unauthorized" }, { status: 401 });
       const from = (url.searchParams.get("from") || "").trim();
       const to = (url.searchParams.get("to") || from).trim();
       if (!DATE_RE.test(from) || !DATE_RE.test(to) || to < from) {
@@ -275,8 +299,9 @@ export default {
 
     // ---------- GET /api/refresh-wind ----------
     // Manual trigger to pull the last 24h (max 48) and merge what's new.
-    // Public; no auth — worst case someone forces a refresh, which is fine.
+    // Admin only — each call makes up to 48 requests to HKO.
     if (url.pathname === "/api/refresh-wind" && request.method === "GET") {
+      if (!checkAdmin(request, env)) return json({ error: "unauthorized" }, { status: 401 });
       const hours = Math.min(48, Math.max(1, Number(url.searchParams.get("hours") || 24)));
       const now = new Date();
       const hk = new Date(now.getTime() + 8 * 3600 * 1000);
