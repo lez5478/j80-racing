@@ -1767,7 +1767,8 @@ function renderScoreboard(race, highlightSail) {
   if (!race) { scoreboardEl.hidden = true; return; }
   const title = race.title || race.name;
   sbName.textContent = title;
-  const startStr = `start ${String(race.startH).padStart(2, "0")}:${String(race.startM).padStart(2, "0")}`;
+  const startStr = `start ${String(race.startH).padStart(2, "0")}:${String(race.startM).padStart(2, "0")}` +
+    (race.pdfStart ? ` (corrected, PDF ${race.pdfStart})` : "");
   const fleet = race.finishers.length + race.dnc.length;
   sbMeta.textContent = `${startStr} · fleet ${fleet}`;
 
@@ -5720,7 +5721,21 @@ loadLiveWind();
 // endpoint first (reflects any freshly-uploaded VTK immediately); if that
 // 404s (local dev via http-server) we fall back to the records.js manifest
 // that was committed at last scan time.
+// Admin start-time corrections (race-overrides.js) have to land in
+// window.RACES before any day renders, so the day list waits for them —
+// at most 4 s, after which the PDF start times are used.
+const raceOverridesReady = (async () => {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const r = await fetch("/api/race-overrides", { cache: "no-store", signal: ctrl.signal });
+    clearTimeout(timer);
+    if (r.ok) applyRaceOverrides(window.RACES, await r.json());
+  } catch { /* offline or local dev: PDF start times */ }
+})();
+
 async function autoLoadFromManifest() {
+  await raceOverridesReady;
   let recs = null;
   try {
     const r = await fetch("/api/records", { cache: "no-store" });

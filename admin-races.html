@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Race start times · admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  body { font: 14px -apple-system, system-ui, sans-serif; background: #0e1a2b; color: #dde7f3; margin: 0; padding: 16px 18px; max-width: 760px; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  input, button, select { font: inherit; padding: 6px 10px; border-radius: 5px; border: 1px solid #2a4263; background: #16263a; color: #dde7f3; }
+  input[type=password] { min-width: 220px; }
+  button { cursor: pointer; background: #1c3653; }
+  button:hover { background: #264168; }
+  button.save { background: #1f4d2e; border-color: #2a6c41; }
+  button.save:hover { background: #2a6c41; }
+  button.revert { background: #4d1f1f; border-color: #6c2a2a; }
+  button.revert:hover { background: #6c2a2a; }
+  .race { background: #102236; border: 1px solid #1f3a5a; border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+  .race-name { font-weight: 600; color: #ffd166; margin-bottom: 6px; }
+  .meta { color: #8fb3df; font-size: 12px; margin: 4px 0 8px; }
+  .fixed { color: #7ad17a; }
+  .preview { font-size: 12px; color: #c5d8ee; margin-top: 6px; min-height: 1em; }
+  .warn { color: #f87171; }
+  #status { color: #ffd166; font-size: 12px; }
+  a { color: #6ea8ff; }
+</style>
+</head>
+<body>
+<h1>Race start times</h1>
+<p class="meta" style="margin:-6px 0 12px;">Correct the gun when the RHKYC results PDF shows the wrong start time. Everyone sees the corrected start (and recomputed elapsed times) on their next reload. <a href="index.html">← back to app</a> · <a href="admin-marks.html">marks admin</a></p>
+
+<div class="row">
+  <input id="token" type="password" placeholder="X-Admin-Token" />
+  <button id="saveTok">Save token</button>
+  <span id="tokSt"></span>
+</div>
+<div class="row">
+  <label for="date">Race day</label>
+  <select id="date"></select>
+  <span id="status"></span>
+</div>
+
+<div id="out"></div>
+
+<script src="race-results/races.js"></script>
+<script>
+const tokenEl = document.getElementById("token");
+const dateEl = document.getElementById("date");
+const out = document.getElementById("out");
+const status = document.getElementById("status");
+const tokSt = document.getElementById("tokSt");
+const LS_TOKEN = "sailing.adminToken"; // shared with admin-marks.html
+
+function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } }
+
+tokenEl.value = lsGet(LS_TOKEN) || "";
+if (tokenEl.value) tokSt.textContent = "loaded from this browser";
+document.getElementById("saveTok").onclick = () => {
+  lsSet(LS_TOKEN, tokenEl.value.trim());
+  tokSt.textContent = "saved ✓";
+  setTimeout(() => (tokSt.textContent = ""), 1500);
+};
+
+const pad = (n) => String(n).padStart(2, "0");
+const secOfDay = (hms) => {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(hms || "");
+  return m ? +m[1] * 3600 + +m[2] * 60 + +(m[3] || 0) : null;
+};
+const toHms = (s) => `${pad(Math.floor(s / 3600))}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}`;
+
+// Race days, newest first; ?date=YYYY-MM-DD preselects one.
+const races = window.RACES || {};
+const days = Object.keys(races).sort().reverse();
+for (const d of days) {
+  const opt = document.createElement("option");
+  opt.value = d;
+  opt.textContent = `${d} · ${races[d].map((r) => r.title || r.name).join(", ")}`;
+  dateEl.appendChild(opt);
+}
+const wanted = new URLSearchParams(location.search).get("date");
+if (wanted && races[wanted]) dateEl.value = wanted;
+dateEl.onchange = () => {
+  history.replaceState(null, "", "?date=" + dateEl.value);
+  load();
+};
+
+let overrides = {};
+
+async function load() {
+  status.textContent = "loading…";
+  try {
+    const r = await fetch("/api/race-overrides", { cache: "no-store" });
+    overrides = r.ok ? await r.json() : {};
+    status.textContent = "";
+  } catch (e) {
+    overrides = {};
+    status.textContent = "couldn't load current corrections: " + e.message;
+  }
+  render();
+}
+
+function render() {
+  const date = dateEl.value;
+  out.innerHTML = "";
+  for (const race of races[date] || []) {
+    const title = race.title || race.name;
+    const pdfStart = `${pad(race.startH)}:${pad(race.startM)}`;
+    const current = overrides[date]?.[title]?.start || null;
+    const first = race.finishers[0];
+
+    const div = document.createElement("div");
+    div.className = "race";
+    const name = document.createElement("div");
+    name.className = "race-name";
+    name.textContent = `${race.name} · ${title}`;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `PDF start <b>${pdfStart}</b>` +
+      (current ? ` · <span class="fixed">corrected to <b>${current}</b></span>` : " · no correction") +
+      (first ? ` · first finish ${first.finish}` : "");
+
+    const row = document.createElement("div");
+    row.className = "row";
+    row.style.marginBottom = "0";
+    const input = document.createElement("input");
+    input.type = "time";
+    input.step = 1;
+    input.value = current || pdfStart;
+    const save = document.createElement("button");
+    save.className = "save";
+    save.textContent = "Save start";
+    row.append(input, save);
+    if (current) {
+      const revert = document.createElement("button");
+      revert.className = "revert";
+      revert.textContent = `Revert to PDF (${pdfStart})`;
+      revert.onclick = () => submit(date, title, null);
+      row.append(revert);
+    }
+
+    const preview = document.createElement("div");
+    preview.className = "preview";
+    const updatePreview = () => {
+      const s = secOfDay(input.value);
+      if (s == null || !first) { preview.textContent = ""; return; }
+      const f = secOfDay(first.finish);
+      if (f < s) {
+        preview.innerHTML = `<span class="warn">That start is after the first finish (${first.finish}).</span>`;
+        return;
+      }
+      preview.textContent = `Winner's elapsed ${first.elapsed} → ${toHms(f - s)} (finish times stay as in the PDF)`;
+    };
+    input.oninput = updatePreview;
+    updatePreview();
+    save.onclick = () => {
+      const s = secOfDay(input.value);
+      if (s == null) { status.textContent = "enter a time"; return; }
+      if (first && secOfDay(first.finish) < s) { status.textContent = "start must be before the first finish"; return; }
+      submit(date, title, input.value.length === 5 ? input.value : toHms(s));
+    };
+
+    div.append(name, meta, row, preview);
+    out.appendChild(div);
+  }
+}
+
+async function submit(date, title, start) {
+  const verb = start ? `set the start of ${title} (${date}) to ${start}` : `remove the correction for ${title} (${date})`;
+  if (!confirm(`Really ${verb}?\nEveryone sees it on their next reload.`)) return;
+  status.textContent = "saving…";
+  try {
+    const r = await fetch("/api/race-overrides", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-admin-token": tokenEl.value.trim() },
+      body: JSON.stringify({ date, title, start }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    status.textContent = "saved ✓";
+    await load();
+  } catch (e) {
+    status.textContent = "error: " + e.message;
+  }
+}
+
+load();
+</script>
+</body>
+</html>

@@ -318,6 +318,51 @@ export default {
                     ...summary });
     }
 
+    // ---------- GET /api/race-overrides ----------
+    // Admin corrections to race start times, applied by the app on load
+    // (see race-overrides.js):
+    //   { "YYYY-MM-DD": { "<race title>": { start: "HH:MM[:SS]", ts } } }
+    if (url.pathname === "/api/race-overrides" && request.method === "GET") {
+      const blob = await env.SAIL_RECORDS.get("race-overrides.json");
+      if (!blob) return json({});
+      return new Response(blob.body, {
+        headers: { "content-type": "application/json", "cache-control": "no-cache", ...CORS_HEADERS },
+      });
+    }
+
+    // ---------- POST /api/race-overrides (admin) ----------
+    // Body: { date, title, start: "HH:MM[:SS]" } to correct the gun,
+    //   or: { date, title, start: null }        to go back to the PDF time.
+    if (url.pathname === "/api/race-overrides" && request.method === "POST") {
+      if (!checkAdmin(request, env)) return json({ error: "unauthorized" }, { status: 401 });
+      let body;
+      try { body = await request.json(); }
+      catch { return json({ error: "JSON expected" }, { status: 400 }); }
+      const date = String(body.date || "").trim();
+      const title = String(body.title || "").trim();
+      const start = body.start == null ? null : String(body.start).trim();
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      if (!title || title.length > 64 || !/^[\w .'()\/-]+$/.test(title)) {
+        return json({ error: "bad race title" }, { status: 400 });
+      }
+      if (start !== null && !/^([01]?\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/.test(start)) {
+        return json({ error: "bad start (need HH:MM or HH:MM:SS)" }, { status: 400 });
+      }
+      const existing = await env.SAIL_RECORDS.get("race-overrides.json");
+      const all = existing ? JSON.parse(await existing.text()) : {};
+      if (start === null) {
+        if (all[date]) delete all[date][title];
+        if (all[date] && !Object.keys(all[date]).length) delete all[date];
+      } else {
+        all[date] = all[date] || {};
+        all[date][title] = { start, ts: Date.now() };
+      }
+      await env.SAIL_RECORDS.put("race-overrides.json", JSON.stringify(all), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      return json({ ok: true, date, title, override: all[date]?.[title] || null });
+    }
+
     // ---------- GET /api/marks ----------
     // Returns canonical per-day manually-placed course marks shared by all
     // users. Shape: { <raceName>: [ { lat, lon, label }, … ] }.

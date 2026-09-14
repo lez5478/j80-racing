@@ -40,6 +40,8 @@ different file under an existing name is refused (409).
 | `GET /api/wind` | public | aggregated hourly HKO wind |
 | `GET /api/marks?date=` / `POST /api/marks` | public | canonical marks / submit a proposal |
 | `GET /api/marks-history`, `POST /api/marks-promote` | admin | review and promote mark proposals |
+| `GET /api/race-overrides` | public | corrected race start times, applied by the app on load |
+| `POST /api/race-overrides` | admin | `{ date, title, start: "HH:MM" \| null }` — edit on `admin-races.html` |
 | `GET /api/refresh-wind?hours=24` | admin | pull the last N (≤ 48) HKO hours now |
 | `GET /api/rebuild-wind?from=&to=` | admin | re-merge archived snapshots for ≤ 14 days |
 | `POST /api/upload-wind-text` | admin | push one historical snapshot (`date`, `hour`, `file`) |
