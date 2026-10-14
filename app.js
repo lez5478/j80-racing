@@ -2838,6 +2838,9 @@ const raceMarks = new Map(); // race.name -> [{lat, lon, label, rounded[], n}]
 const raceFinishLines = new Map(); // race.name -> { rc, pin, crossings: [{sail, place, lat, lon}] }
 // True-wind direction (degrees, FROM) per race — used by the layline renderer.
 const raceWindByName = new Map();
+// Per race: { hko, implied: { deg, tackAngle, … } | null } — where the
+// raceWindByName value came from, for the race-stats readout.
+const raceWindInfo = new Map();
 
 // Manually-placed marks per race (date.race → [{lat, lon, label}]).
 // Stored in localStorage so they persist across sessions. When a race
@@ -2963,7 +2966,20 @@ function computeRaceMarksForDay() {
     }
     const marks = clusterMarks(allEvents, wind, 100);
     raceMarks.set(raceName, marks);
-    if (wind != null) raceWindByName.set(raceName, wind);
+    // Prefer the wind implied by the fleet's first beat over the station
+    // wind; seeded by the station (or the start → W bearing without one).
+    const wMark = effectiveMarksFor(raceName).find((m) => m.label?.toUpperCase().startsWith("W"));
+    const sm = startLineForRace(raceName);
+    let seed = wind;
+    if (seed == null && wMark && sm?.rc && sm?.pin) {
+      const mid = { lat: (sm.rc.lat + sm.pin.lat) / 2, lon: (sm.rc.lon + sm.pin.lon) / 2 };
+      seed = (Math.atan2((wMark.lon - mid.lon) * Math.cos(mid.lat * Math.PI / 180),
+        wMark.lat - mid.lat) * 180 / Math.PI + 360) % 360;
+    }
+    const implied = impliedWindFromBeat(info.tracks, startSec, endSec, wMark, seed);
+    raceWindInfo.set(raceName, { hko: wind, implied });
+    const raceWind = implied ? implied.deg : wind;
+    if (raceWind != null) raceWindByName.set(raceName, raceWind);
     // Also infer the finish line from boat crossings at their printed
     // finish times — uses the same anchored RC as the start line.
     const fl = computeFinishLineForRace(info.race, info.tracks);
@@ -3243,6 +3259,16 @@ function fmtSec(sec) {
   return m > 0 ? `${sign}${m}m${s.toFixed(0)}s` : `${sign}${s.toFixed(1)}s`;
 }
 
+// "Wind from tracks" readout: the beat-implied TWD that drives the ladder,
+// laylines and gap, next to the station wind it replaced.
+function impliedWindRow(raceName) {
+  const info = raceName ? raceWindInfo.get(raceName) : null;
+  if (!info?.implied) return "";
+  const { deg, tackAngle } = info.implied;
+  const hko = info.hko != null ? ` · HKO ${Math.round(info.hko)}°` : "";
+  return `<span class="rs-k">Wind from tracks</span><span class="rs-v" title="Bisector of the fleet's starboard and port tacks on the first beat">${Math.round(deg)}°${hko} · tacks ${Math.round(tackAngle)}° apart</span>`;
+}
+
 let _activeAnalysis = null;
 function renderRaceStats(track) {
   if (!track || track.removed) { raceStatsEl.hidden = true; return; }
@@ -3290,6 +3316,7 @@ function renderRaceStats(track) {
     <span class="rs-k">Marks (rounded)</span><span class="rs-v">${stats.marks.length} (${totalRoundings})</span>
     <span class="rs-k">Avg wind ${stats.avgWindDeg != null ? Math.round(stats.avgWindDeg) + "°" : "—"}</span>
     <span class="rs-v"></span>
+    ${impliedWindRow(track.meta?.race?.name)}
   `;
 
   // Performance
@@ -4861,6 +4888,7 @@ function clearTracks() {
   raceMarks.clear();
   raceFinishLines.clear();
   raceWindByName.clear();
+  raceWindInfo.clear();
   markRoundingsLayer.clearLayers();
   raceFinishLineLayer.clearLayers();
   laylinesLayer.clearLayers();

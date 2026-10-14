@@ -78,3 +78,27 @@ test("liveTimeGap freezes to the committee result once both boats finish", () =>
   assert.equal(liveTimeGap(a, b, T0 + 2410, null, null), null);
   delete globalThis.BOAT_NAMES;
 });
+
+// ---------- beat-implied wind ----------
+test("impliedWindFromBeat bisects the two tacks, whatever the seed", () => {
+  const { impliedWindFromBeat } = require("../race-metrics.js");
+  const twd = 100, half = 42;
+  const mk = (id, startTack) => {
+    const points = [];
+    for (let t = 0; t < 600; t++) {
+      // 2-minute tacks with a little heading noise; a slow tack every 120 s.
+      const tackIdx = Math.floor(t / 120) + startTack;
+      const inTack = t % 120 < 5;
+      const cog = (twd + (tackIdx % 2 ? half : -half) + Math.sin(t) * 3 + 360) % 360;
+      points.push({ t, lat: 22.2, lon: 114.2, cog, sog: inTack ? 1.5 : 5 });
+    }
+    return { id, points };
+  };
+  const r = impliedWindFromBeat([mk(1, 0), mk(2, 1)], 0, 1000, null, 85);
+  assert.ok(Math.abs(r.deg - twd) < 1, `deg ${r.deg}`);
+  assert.ok(Math.abs(r.tackAngle - 2 * half) < 2, `tack ${r.tackAngle}`);
+  // Downwind-only data has no clean two-tack beat → null.
+  const run = [{ id: 3, points: Array.from({ length: 600 }, (_, t) => ({ t, lat: 22.2, lon: 114.2, cog: 280, sog: 6 })) }];
+  assert.equal(impliedWindFromBeat(run, 0, 1000, null, 85), null);
+  assert.equal(impliedWindFromBeat([mk(1, 0)], 0, 1000, null, null), null);
+});

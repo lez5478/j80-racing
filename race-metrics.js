@@ -204,6 +204,70 @@ function liveTimeGap(trackA, trackB, atSec, windDeg, origin) {
   };
 }
 
+// True-wind direction implied by how the fleet sailed the first beat.
+// Close-hauled boats sail at roughly equal angles either side of the wind,
+// so the bisector of the mean starboard- and port-tack COGs is the TWD on
+// the course — often better than a shore station bent by the hills.
+// Beat = gun → each boat's closest approach to the windward mark (or the
+// first 35% of the race without one). Samples are thinned to ~1 Hz so
+// 4 Hz loggers don't outweigh 1 Hz ones, and slow (< 2.5 kn) ones dropped.
+// `seedDeg` (station wind or start→W bearing) only picks which side is
+// upwind; the split/bisect step is iterated to convergence.
+// Returns { deg, tackAngle, nStbd, nPort } or null when the beat doesn't
+// look like two clean tacks.
+function impliedWindFromBeat(tracks, startSec, endSec, wMark, seedDeg) {
+  if (seedDeg == null || !isFinite(seedDeg)) return null;
+  const toRad = Math.PI / 180;
+  const wrap = (a) => ((a + 540) % 360) - 180;
+  const cmean = (arr) => {
+    let s = 0, c = 0;
+    for (const a of arr) { s += Math.sin(a * toRad); c += Math.cos(a * toRad); }
+    return (Math.atan2(s, c) / toRad + 360) % 360;
+  };
+  const distM = (a, b) => Math.hypot(
+    (a.lat - b.lat) * 111_320,
+    (a.lon - b.lon) * 111_320 * Math.cos(a.lat * toRad));
+  const beatEnd = startSec + ((endSec || startSec + 3600) - startSec) * (wMark ? 0.6 : 0.35);
+  const cogs = [];
+  for (const t of tracks) {
+    const pts = t.points.filter((p) => p.t >= startSec && p.t <= beatEnd);
+    if (!pts.length) continue;
+    let stop = pts.length - 1;
+    if (wMark) {
+      let best = Infinity;
+      for (let i = 0; i < pts.length; i++) {
+        const d = distM(pts[i], wMark);
+        if (d < best) { best = d; stop = i; }
+        if (d < 40) break;
+      }
+    }
+    let lastT = -Infinity;
+    for (let i = 0; i <= stop; i++) {
+      const p = pts[i];
+      if (p.t - lastT < 1 || !(p.sog > 2.5)) continue;
+      lastT = p.t;
+      cogs.push(p.cog);
+    }
+  }
+  let twd = seedDeg, stbd = [], port = [];
+  for (let k = 0; k < 10; k++) {
+    stbd = []; port = [];
+    for (const h of cogs) {
+      const r = wrap(h - twd);
+      if (Math.abs(r) < 15 || Math.abs(r) > 80) continue; // tacking / reaching
+      (r > 0 ? stbd : port).push(h);
+    }
+    if (stbd.length < 30 || port.length < 30) return null;
+    const next = cmean([cmean(stbd), cmean(port)]);
+    const moved = Math.abs(wrap(next - twd));
+    twd = next;
+    if (moved < 0.1) break;
+  }
+  const tackAngle = Math.abs(wrap(cmean(stbd) - cmean(port)));
+  if (tackAngle < 60 || tackAngle > 115) return null;
+  return { deg: twd, tackAngle, nStbd: stbd.length, nPort: port.length };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { getWindProgress, getCourseProgress, officialFinishElapsed, liveTimeGap };
+  module.exports = { getWindProgress, getCourseProgress, officialFinishElapsed, liveTimeGap, impliedWindFromBeat };
 }
