@@ -268,9 +268,6 @@ function addTrack(name, points, meta = {}) {
   // Tooltip uses just the boat name — race context is already obvious
   // from the active race tab and start-countdown panel.
   const tipBoat = meta?.boat || name;
-  const start = L.circleMarker(latlngs[0], {
-    radius: 5, color: "#fff", weight: 2, fillColor: color, fillOpacity: 1,
-  }).bindTooltip(`Start: ${tipBoat}`);
 
   const maxSog = points.reduce((m, p) => Math.max(m, p.sog || 0), 0);
   const duration = points[points.length - 1].t - points[0].t;
@@ -299,7 +296,7 @@ function addTrack(name, points, meta = {}) {
     closeButton: true,
   });
 
-  const layerChildren = [line, hit, start, boat];
+  const layerChildren = [line, hit, boat];
 
   // If the helmsman pinged a start line for this race, render it.
   const startMarks = meta?.startMarks;
@@ -396,7 +393,7 @@ function addTrack(name, points, meta = {}) {
   const track = {
     id, name, layer, line, hit, points, color, visible: true,
     latlngs, fullBounds, cumDist, gaps,
-    boat, maxSog, startMarker: start,
+    boat, maxSog,
     tStart: points[0].t, tEnd: points[points.length - 1].t,
     meta, // { race, boat, window } when set by selectDay
   };
@@ -3497,16 +3494,6 @@ function updateBoatsToRaceTime(t) {
       const mid = (lo + hi) >> 1;
       if (pts[mid].t <= clamped) lo = mid; else hi = mid;
     }
-    // Hide the start-position dot once the race has started — only useful
-    // during the pre-start window to see where the boat began recording.
-    if (tr.startMarker) {
-      const rstart = tr.meta?.race?.start ? Date.parse(tr.meta.race.start) / 1000 : null;
-      const showStartDot = rstart == null || clamped < rstart;
-      tr.startMarker.setStyle({
-        opacity: showStartDot ? 1 : 0,
-        fillOpacity: showStartDot ? 1 : 0,
-      });
-    }
     // Trim the trail per trailStartTime (pre-start noise, "last 5 min"
     // mode). The boat icon itself is still rendered before that window.
     const trailStart = trailStartTime(tr, clamped);
@@ -3989,13 +3976,13 @@ async function selectDay(key) {
   statusEl.textContent = `Loading ${files.length} session(s) from ${key}…`;
 
   // Parse all VTKs for this day → grouped by boat.
-  const byBoat = new Map(); // boat -> { points: [], buttons: [] }
+  const byBoat = new Map(); // boat -> { points: [], sources: [], buttons: [] }
   for (const f of files) {
     try {
       const { boat, points, buttons } = await loadFileAsPoints(f);
-      if (!byBoat.has(boat)) byBoat.set(boat, { points: [], buttons: [] });
+      if (!byBoat.has(boat)) byBoat.set(boat, { points: [], sources: [], buttons: [] });
       const slot = byBoat.get(boat);
-      slot.points.push(...points);
+      slot.sources.push(points);
       // Tag each ping with the boat that recorded it — other boats borrow
       // the line, and the picker / map tooltips should credit the pinger.
       slot.buttons.push(...buttons.map((b) => ({ ...b, by: boat })));
@@ -4003,9 +3990,11 @@ async function selectDay(key) {
       console.error(`Failed to read ${f.name}:`, e);
     }
   }
-  // Sort each boat's data by time.
+  // Merge each boat's files (best source wins where they overlap) and
+  // sort its pings by time.
   for (const slot of byBoat.values()) {
-    slot.points.sort((a, b) => a.t - b.t);
+    slot.points = mergeTrackSources(slot.sources);
+    slot.sources = null;
     slot.buttons.sort((a, b) => a.t - b.t);
   }
 

@@ -214,3 +214,26 @@ test("parseVKX reads position rows, converts units and skips other rows", () => 
   assert.ok(Math.abs(p.hdg - 90) < 0.01, `hdg ${p.hdg}`);
   assert.throws(() => parseVKX(new Uint8Array([0x99, 0, 0])), /Not a VKX/);
 });
+
+// ---------- merging a boat's files ----------
+test("mergeTrackSources keeps the higher-rate source where files overlap", () => {
+  const { mergeTrackSources } = require("../track-parsers.js");
+  const pts = (t0, t1, dt, tag) => {
+    const out = [];
+    for (let t = t0; t <= t1; t += dt) out.push({ t, tag });
+    return out;
+  };
+  const fast = [...pts(100, 200, 0.25, "vtk"), ...pts(500, 600, 0.25, "vtk")]; // gap 200..500
+  const slow = pts(0, 700, 1, "tcx");
+  const m = mergeTrackSources([slow, fast]);
+  const tagAt = (t) => m.find((p) => p.t === t).tag;
+  assert.equal(tagAt(150), "vtk");
+  assert.ok(!m.some((p) => p.tag === "tcx" && p.t >= 100 && p.t <= 200));
+  assert.equal(tagAt(50), "tcx");  // before the fast source
+  assert.equal(tagAt(300), "tcx"); // fills the fast source's gap
+  assert.equal(tagAt(650), "tcx"); // after it
+  for (let i = 1; i < m.length; i++) assert.ok(m[i].t >= m[i - 1].t);
+  // 800k points must not blow the stack.
+  const big = pts(0, 200000, 0.25, "big");
+  assert.equal(mergeTrackSources([big]).length, big.length);
+});

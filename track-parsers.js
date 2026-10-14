@@ -322,6 +322,33 @@ function parseVakarosCSV(text) {
   return { points, buttons: [] };
 }
 
+// Merge one boat's recordings from several files/devices. Interleaving two
+// GPS sources over the same minutes makes the track zig-zag, so where they
+// overlap only the highest-rate source is kept; the others just fill its
+// gaps (> 30 s without a sample). Returns one time-sorted points array.
+function mergeTrackSources(sources) {
+  const GAP = 30;
+  const rate = (pts) => pts.length > 1 ? (pts[pts.length - 1].t - pts[0].t) / (pts.length - 1) : Infinity;
+  const ranked = sources.filter((s) => s.length)
+    .map((pts) => pts.slice().sort((a, b) => a.t - b.t))
+    .sort((a, b) => rate(a) - rate(b) || b.length - a.length);
+  const covered = []; // [t0, t1] spans already supplied by a better source
+  const merged = [];
+  for (const pts of ranked) {
+    const isCovered = (t) => covered.some(([a, b]) => t >= a && t <= b);
+    const spans = [];
+    let span = null;
+    for (const p of pts) {
+      if (isCovered(p.t)) continue;
+      merged.push(p);
+      if (span && p.t - span[1] <= GAP) span[1] = p.t;
+      else spans.push(span = [p.t, p.t]);
+    }
+    covered.push(...spans);
+  }
+  return merged.sort((a, b) => a.t - b.t);
+}
+
 // Dispatch by file extension.
 function parseTrackFile(name, bytes) {
   const ext = name.toLowerCase().split(".").pop();
@@ -336,5 +363,5 @@ function parseTrackFile(name, bytes) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { parseVTK, parseGPX, parseTCX, parseVakarosCSV, parseVKX, parseTrackFile, fillSogCog, quatToHeelPitch };
+  module.exports = { parseVTK, parseGPX, parseTCX, parseVakarosCSV, parseVKX, parseTrackFile, mergeTrackSources, fillSogCog, quatToHeelPitch };
 }
