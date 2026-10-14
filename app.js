@@ -653,12 +653,13 @@ function renderWindGrid() {
   const midLatRad = (b.getNorth() + b.getSouth()) / 2 * Math.PI / 180;
   const latStep = lonStep * Math.cos(midLatRad);
   const rows = Math.max(1, Math.round((b.getNorth() - b.getSouth()) / latStep));
+  const fleetDeg = fleetWindDeg(raceTime);
 
   for (let r = 0; r < rows; r++) {
     const lat = b.getSouth() + (r + 0.5) * latStep;
     for (let c = 0; c < cols; c++) {
       const lon = b.getWest() + (c + 0.5) * lonStep;
-      const w = idwAt(lat, lon, samples);
+      const w = withFleetDir(idwAt(lat, lon, samples), fleetDeg);
       if (!w || w.spd < 0.5) continue;
       L.marker([lat, lon], {
         icon: gridArrowIcon(w.deg, w.spd),
@@ -738,6 +739,7 @@ const WindParticleLayer = L.Layer.extend({
 
     const samples = currentWindSamples();
     const have = samples.length >= 3;
+    const fleetDeg = fleetWindDeg(raceTime);
 
     // Maintain particle count proportional to canvas area (~1 per 5000 px²).
     const target = have ? Math.min(1500, Math.max(200, Math.round((W * H) / 5000))) : 0;
@@ -757,7 +759,7 @@ const WindParticleLayer = L.Layer.extend({
       p.age++;
       const oldX = p.x, oldY = p.y;
       const ll = this._map.containerPointToLatLng([p.x, p.y]);
-      const w = have ? idwAt(ll.lat, ll.lng, samples) : null;
+      const w = have ? withFleetDir(idwAt(ll.lat, ll.lng, samples), fleetDeg) : null;
       if (!w || w.spd < 0.2 || p.age > p.maxAge ||
           p.x < 0 || p.x > W || p.y < 0 || p.y > H) {
         this._spawn(p); continue;
@@ -896,6 +898,25 @@ function trailStartTime(tr, t) {
   let from = rstartSec != null ? rstartSec - 120 : -Infinity;
   if (trailMode === "recent") from = Math.max(from, t - TRAIL_RECENT_SEC);
   return from;
+}
+
+// Wind direction source: "fleet" = the beat-implied TWD per race (ladder,
+// laylines, particles, arrow grid, boat readout; HKO speeds kept), "hko" =
+// the station field as recorded.
+const LS_WIND_SRC = "sailing.windSource";
+let windSource = localStorage.getItem(LS_WIND_SRC) === "hko" ? "hko" : "fleet";
+// Fleet-implied wind direction for the race running at time t, or null
+// (HKO mode, no race window covering t, or no clean beat for that race).
+function fleetWindDeg(t) {
+  if (windSource !== "fleet" || t == null) return null;
+  for (const info of raceWindInfo.values()) {
+    if (info.implied && t >= info.from && t <= info.to) return info.implied.deg;
+  }
+  return null;
+}
+// Apply the fleet direction (if any) to an IDW wind sample.
+function withFleetDir(w, fleetDeg) {
+  return w && fleetDeg != null ? { ...w, deg: fleetDeg } : w;
 }
 
 const LS_LADDER = "sailing.ladderRungs";
@@ -1472,6 +1493,23 @@ if (trailModeSel) {
   trailModeSel.addEventListener("change", () => {
     trailMode = trailModeSel.value;
     localStorage.setItem(LS_TRAIL, trailMode);
+    if (raceTime != null) updateBoatsToRaceTime(raceTime);
+  });
+}
+
+const windSourceSel = document.getElementById("windSource");
+if (windSourceSel) {
+  windSourceSel.value = windSource;
+  windSourceSel.addEventListener("change", () => {
+    windSource = windSourceSel.value;
+    localStorage.setItem(LS_WIND_SRC, windSource);
+    for (const [name, info] of raceWindInfo) {
+      const deg = windSource === "fleet" && info.implied ? info.implied.deg : info.hko;
+      if (deg != null) raceWindByName.set(name, deg); else raceWindByName.delete(name);
+    }
+    renderLadderRungs();
+    renderLaylinesOnMap();
+    renderWindGrid();
     if (raceTime != null) updateBoatsToRaceTime(raceTime);
   });
 }
@@ -2974,8 +3012,12 @@ function computeRaceMarksForDay() {
         wMark.lat - mid.lat) * 180 / Math.PI + 360) % 360;
     }
     const implied = impliedWindFromBeat(info.tracks, startSec, endSec, wMark, seed);
-    raceWindInfo.set(raceName, { hko: wind, implied });
-    const raceWind = implied ? implied.deg : wind;
+    const win = info.tracks[0].meta?.window;
+    raceWindInfo.set(raceName, {
+      hko: wind, implied,
+      from: win?.windowStart ?? startSec, to: win?.windowEnd ?? (endSec ?? startSec + 3600),
+    });
+    const raceWind = windSource === "fleet" && implied ? implied.deg : wind;
     if (raceWind != null) raceWindByName.set(raceName, raceWind);
     // Also infer the finish line from boat crossings at their printed
     // finish times — uses the same anchored RC as the start line.
@@ -3348,7 +3390,7 @@ function refreshReadout() {
   // Interpolated wind at the boat's current lat/lon.
   const samples = currentWindSamples();
   if (samples.length >= 3) {
-    const w = idwAt(s.lat, s.lon, samples);
+    const w = withFleetDir(idwAt(s.lat, s.lon, samples), fleetWindDeg(s.t));
     if (w && w.spd >= 0.1) {
       const fromDeg = Math.round(w.deg);
       roWind.textContent = `${String(fromDeg).padStart(3, "0")}° · ${w.spd.toFixed(1)}`;
