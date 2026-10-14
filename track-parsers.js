@@ -201,18 +201,26 @@ function parseTCX(text) {
 // ---------- Vakaros VKX parser ----------
 // Native Vakaros Atlas log (spec: github.com/vakaros/vkx). A stream of rows,
 // each a 1-byte key followed by a fixed-size little-endian payload. We read
-// 0x02 (position/velocity/orientation) rows and skip everything else.
+// 0x02 (position/velocity/orientation), 0x04 (race timer) and 0x05 (line
+// ping) rows and skip everything else.
 // 0x02 payload: u64 unix ms, i32 lat 1e-7, i32 lon 1e-7, f32 SOG m/s,
 // f32 COG rad, f32 altitude, f32 quaternion w/x/y/z (true NED frame).
+// 0x04 payload: u64 unix ms, u8 event, i32 timer seconds.
+// 0x05 payload: u64 unix ms, u8 end (0 pin, 1 boat), f32 lat, f32 lon.
+// Line pings become RC/PIN buttons (same shape as the Velocitek ones, but
+// with the Atlas's own pinged position); timer events become TIMER buttons
+// whose RACE_START is the device's gun.
 const VKX_ROW_LEN = {
   0xff: 7, 0xfe: 2, 0x01: 32, 0x02: 44, 0x03: 20, 0x04: 13, 0x05: 17,
   0x06: 18, 0x07: 12, 0x08: 13, 0x0a: 16, 0x0b: 16, 0x0c: 12, 0x0e: 16,
   0x0f: 16, 0x10: 12, 0x20: 13, 0x21: 52,
 };
 const MS_TO_KN = 3600 / 1852;
+const VKX_TIMER_EVENTS = ["RESET", "START", "SYNC", "RACE_START", "RACE_END"];
 function parseVKX(uint8) {
   const dv = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
   const points = [];
+  const buttons = [];
   let i = 0;
   while (i < uint8.length) {
     const key = uint8[i];
@@ -224,6 +232,25 @@ function parseVKX(uint8) {
     const p = i + 1;
     if (p + len > uint8.length) break;
     i = p + len;
+    if (key === 0x05) {
+      const lat = dv.getFloat32(p + 9, true), lon = dv.getFloat32(p + 13, true);
+      if (isFinite(lat) && isFinite(lon) && (lat || lon)) {
+        buttons.push({
+          type: uint8[p + 8] === 1 ? "RC" : "PIN",
+          t: Number(dv.getBigUint64(p, true)) / 1000, lat, lon,
+        });
+      }
+      continue;
+    }
+    if (key === 0x04) {
+      buttons.push({
+        type: "TIMER",
+        event: VKX_TIMER_EVENTS[uint8[p + 8]] || String(uint8[p + 8]),
+        t: Number(dv.getBigUint64(p, true)) / 1000,
+        timer: dv.getInt32(p + 9, true),
+      });
+      continue;
+    }
     if (key !== 0x02) continue;
     const t = Number(dv.getBigUint64(p, true)) / 1000;
     const lat = dv.getInt32(p + 8, true) / 1e7;
@@ -244,7 +271,7 @@ function parseVKX(uint8) {
     }
     points.push(pt);
   }
-  return { points, buttons: [] };
+  return { points, buttons };
 }
 
 // Vakaros (and similar) CSV export. Header form:

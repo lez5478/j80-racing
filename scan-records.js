@@ -23,7 +23,7 @@ function listDirs(p) {
 function listVtk(p) {
   if (!fs.existsSync(p)) return [];
   return fs.readdirSync(p, { withFileTypes: true })
-    .filter((e) => e.isFile() && /\.vtk$/i.test(e.name))
+    .filter((e) => e.isFile() && /\.(vtk|vkx)$/i.test(e.name))
     .map((e) => e.name)
     .sort();
 }

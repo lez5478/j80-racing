@@ -3225,6 +3225,13 @@ function renderRaceStats(track) {
       : `implied ${sanity.implied} (Δ ${fmtSec(sanity.deltaSec)}, ${agreePct}% agree)`;
     sanityRow = `<span class="rs-k">Stated start</span><span class="rs-v ${cls}">${sanity.stated.slice(0,5)} · ${note}</span>`;
   }
+  const gun = track.meta?.deviceGun;
+  if (gun != null && track.meta?.race) {
+    const delta = gun - Date.parse(track.meta.race.start) / 1000;
+    const cls = Math.abs(delta) <= 2 ? "rs-good" : Math.abs(delta) <= 60 ? "" : "rs-bad";
+    const hkt = new Date((gun + 8 * 3600) * 1000).toISOString().slice(11, 19);
+    sanityRow += `<span class="rs-k">Device gun</span><span class="rs-v ${cls}">${hkt} · Δ ${fmtSec(delta)} vs stated</span>`;
+  }
   if (stats.startLine) {
     const sl = stats.startLine;
     const lateClass = sl.ocs ? "rs-bad" : (sl.lateBy != null && sl.lateBy < 5 ? "rs-good" : "");
@@ -3798,7 +3805,9 @@ async function loadFileAsPoints(file) {
   const boat = parts[parts.length - 3] || "Boat";
 
   // Try cache first — keyed by URL+size when available.
-  const cacheKey = file.url ? `${file.url}#?` : `local:${rel}`;
+  // VKX entries carry a parser version: early caches had no line/timer events.
+  const ver = /\.vkx$/i.test(rel) ? "#vkx2" : "";
+  const cacheKey = (file.url ? `${file.url}#?` : `local:${rel}`) + ver;
   const cached = await vtkCacheGet(cacheKey);
   if (cached && cached.boat === boat) {
     return { boat, points: cached.points, buttons: cached.buttons, rel };
@@ -3975,7 +3984,8 @@ async function selectDay(key) {
       // Prefer this boat's own ping if it has one (most accurate for
       // its skipper), else fall back to the shared race-level line.
       const startMarks = startLinesByBoat.get(boat)[wi] || sharedStartLines[wi];
-      addTrack(name, slice, { race: w.race, boat, window: w, startMarks });
+      const deviceGun = deviceGunNear(slot.buttons, w.actualStart);
+      addTrack(name, slice, { race: w.race, boat, window: w, startMarks, deviceGun });
       added++;
     }
   }
@@ -4746,6 +4756,18 @@ function startLinesForDay(buttons, raceStartsSec) {
     if (!out[i].pin && out[i + 1].pin) out[i].pin = out[i + 1].pin;
   }
   return out.map((s) => (s.rc || s.pin) ? s : null);
+}
+
+// The boat's own recorded gun (Vakaros RACE_START timer event) closest to
+// the stated start, within 15 min — used to cross-check the RHKYC time.
+function deviceGunNear(buttons, startSec) {
+  let best = null;
+  for (const ev of buttons) {
+    if (ev.type !== "TIMER" || ev.event !== "RACE_START") continue;
+    const d = Math.abs(ev.t - startSec);
+    if (d <= 15 * 60 && (!best || d < Math.abs(best - startSec))) best = ev.t;
+  }
+  return best;
 }
 
 // Binary-search slice of points where windowStart ≤ t ≤ windowEnd.

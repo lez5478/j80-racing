@@ -189,11 +189,21 @@ test("parseVKX reads position rows, converts units and skips other rows", () => 
   const q = [Math.cos(r) * Math.cos(yw), Math.sin(r) * Math.cos(yw), Math.sin(r) * Math.sin(yw), Math.cos(r) * Math.sin(yw)];
   rows.push(pos(0, 0, 0, 0, 0, [1, 0, 0, 0])); // no fix → skipped
   rows.push(pos(1788575426063, 22.236, 114.1869, 2.5, Math.PI / 2, q));
+  const ping = new Uint8Array(18); const pdv = new DataView(ping.buffer);
+  ping[0] = 0x05; pdv.setBigUint64(1, 1788575430000n, true); ping[9] = 1;
+  pdv.setFloat32(10, 22.2, true); pdv.setFloat32(14, 114.15, true); rows.push(ping);
+  const gun = new Uint8Array(14); const gdv = new DataView(gun.buffer);
+  gun[0] = 0x04; gdv.setBigUint64(1, 1788581100222n, true); gun[9] = 3; rows.push(gun);
   const term = new Uint8Array(3); term[0] = 0xfe; rows.push(term);
   const bytes = new Uint8Array(rows.reduce((n, b) => n + b.length, 0));
   let o = 0; for (const b of rows) { bytes.set(b, o); o += b.length; }
 
-  const { points } = parseTrackFile("pierre.vkx", bytes);
+  const { points, buttons } = parseTrackFile("pierre.vkx", bytes);
+  assert.equal(buttons.length, 2);
+  assert.equal(buttons[0].type, "RC");
+  assert.equal(buttons[0].t, 1788575430);
+  assert.ok(Math.abs(buttons[0].lat - 22.2) < 1e-5 && Math.abs(buttons[0].lon - 114.15) < 1e-5);
+  assert.deepEqual(buttons[1], { type: "TIMER", event: "RACE_START", t: 1788581100.222, timer: 0 });
   assert.equal(points.length, 1);
   const p = points[0];
   assert.equal(p.t, 1788575426.063);
