@@ -6,7 +6,7 @@ const assert = require("node:assert/strict");
 const { parseFIT } = require("../fit.js");
 global.parseFIT = parseFIT; // track-parsers.js expects the browser global
 const {
-  parseVTK, parseGPX, parseTCX, parseVakarosCSV, parseTrackFile, fillSogCog,
+  parseVTK, parseGPX, parseTCX, parseVakarosCSV, parseVKX, parseTrackFile, fillSogCog,
 } = require("../track-parsers.js");
 
 const T0 = Date.parse("2026-09-05T04:00:00Z") / 1000;
@@ -166,4 +166,41 @@ test("parseFIT rejects non-FIT data", () => {
 
 test("parseTrackFile rejects unknown extensions", () => {
   assert.throws(() => parseTrackFile("track.kml", new Uint8Array(0)), /Unsupported/);
+});
+
+// ---------- Vakaros VKX ----------
+test("parseVKX reads position rows, converts units and skips other rows", () => {
+  const rows = [];
+  const header = new Uint8Array(8); header[0] = 0xff; header[1] = 5; rows.push(header);
+  const cfg = new Uint8Array(14); cfg[0] = 0x08; rows.push(cfg);
+  const pos = (ms, lat, lon, sogMs, cogRad, q) => {
+    const b = new Uint8Array(45); const dv = new DataView(b.buffer);
+    b[0] = 0x02;
+    dv.setBigUint64(1, BigInt(ms), true);
+    dv.setInt32(9, Math.round(lat * 1e7), true);
+    dv.setInt32(13, Math.round(lon * 1e7), true);
+    dv.setFloat32(17, sogMs, true);
+    dv.setFloat32(21, cogRad, true);
+    q.forEach((v, k) => dv.setFloat32(29 + k * 4, v, true));
+    return b;
+  };
+  // 20° roll about the forward axis, yaw 90° (heading east).
+  const r = 10 * Math.PI / 180, yw = 45 * Math.PI / 180;
+  const q = [Math.cos(r) * Math.cos(yw), Math.sin(r) * Math.cos(yw), Math.sin(r) * Math.sin(yw), Math.cos(r) * Math.sin(yw)];
+  rows.push(pos(0, 0, 0, 0, 0, [1, 0, 0, 0])); // no fix → skipped
+  rows.push(pos(1788575426063, 22.236, 114.1869, 2.5, Math.PI / 2, q));
+  const term = new Uint8Array(3); term[0] = 0xfe; rows.push(term);
+  const bytes = new Uint8Array(rows.reduce((n, b) => n + b.length, 0));
+  let o = 0; for (const b of rows) { bytes.set(b, o); o += b.length; }
+
+  const { points } = parseTrackFile("pierre.vkx", bytes);
+  assert.equal(points.length, 1);
+  const p = points[0];
+  assert.equal(p.t, 1788575426.063);
+  assert.ok(Math.abs(p.lat - 22.236) < 1e-6 && Math.abs(p.lon - 114.1869) < 1e-6);
+  assert.ok(Math.abs(p.sog - 2.5 * 3600 / 1852) < 1e-4);
+  assert.ok(Math.abs(p.cog - 90) < 1e-3);
+  assert.ok(Math.abs(p.heel - 20) < 0.01, `heel ${p.heel}`);
+  assert.ok(Math.abs(p.hdg - 90) < 0.01, `hdg ${p.hdg}`);
+  assert.throws(() => parseVKX(new Uint8Array([0x99, 0, 0])), /Not a VKX/);
 });

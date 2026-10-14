@@ -38,7 +38,7 @@
 <div style="margin-bottom: 16px;"><a class="back" href="/">← Back to replay</a></div>
 <h1>Upload a race track</h1>
 <p class="hint">
-  Pick your boat, then drag your track file(s) onto the box below — Velocitek <code>.VTK</code>, GPX, TCX, Garmin FIT or Vakaros CSV. The date is read automatically from the file. Files go straight to the fleet's shared storage; the race-day list on the main page refreshes on the next visit.
+  Pick your boat, then drag your track file(s) onto the box below — Velocitek <code>.VTK</code>, GPX, TCX, Garmin FIT or Vakaros <code>.vkx</code> / CSV. The date is read automatically from the file. Files go straight to the fleet's shared storage; the race-day list on the main page refreshes on the next visit.
 </p>
 
 <label for="code">Fleet upload code</label>
@@ -50,13 +50,14 @@
 
 <div id="drop">
   <strong>Drop track files here</strong><br>or click to pick
-  <input type="file" id="pickFiles" accept=".vtk,.VTK,.gpx,.GPX,.tcx,.TCX,.fit,.FIT,.csv,.CSV" multiple hidden>
+  <input type="file" id="pickFiles" accept=".vtk,.VTK,.gpx,.GPX,.tcx,.TCX,.fit,.FIT,.csv,.CSV,.vkx,.VKX" multiple hidden>
 </div>
 
 <div id="log"></div>
 
 <script src="race-results/races.js"></script>
 <script src="fit.js"></script>
+<script src="track-parsers.js"></script>
 <script>
 const dropEl = document.getElementById("drop");
 const pickEl = document.getElementById("pickFiles");
@@ -169,6 +170,12 @@ async function dateFromFit(file) {
   return points.length ? hkDate(points[0].t) : null;
 }
 
+// Read a Vakaros VKX file's first position row (parser in track-parsers.js).
+async function dateFromVkx(file) {
+  const { points } = parseVKX(new Uint8Array(await file.arrayBuffer()));
+  return points.length ? hkDate(points[0].t) : null;
+}
+
 // Read the first data row of a CSV to get the timestamp.
 async function dateFromCsv(file) {
   const text = await file.slice(0, 4096).text();
@@ -190,6 +197,7 @@ async function dateFromFile(file) {
   if (ext === "gpx" || ext === "tcx") return dateFromXml(file);
   if (ext === "csv") return dateFromCsv(file);
   if (ext === "fit") return dateFromFit(file);
+  if (ext === "vkx") return dateFromVkx(file);
   return null;
 }
 
@@ -231,8 +239,8 @@ async function uploadOne(file, boat) {
 async function handleFiles(files) {
   const boat = selectedBoat();
   if (!boat) { log("Pick your boat (or type its name) first", "err"); return; }
-  const supported = [...files].filter((f) => /\.(vtk|gpx|tcx|fit|csv)$/i.test(f.name));
-  if (!supported.length) { log("No .VTK / .GPX / .TCX / .FIT / .CSV files", "err"); return; }
+  const supported = [...files].filter((f) => /\.(vtk|gpx|tcx|fit|csv|vkx)$/i.test(f.name));
+  if (!supported.length) { log("No .VTK / .GPX / .TCX / .FIT / .VKX / .CSV files", "err"); return; }
   lsSet(LS_BOAT, boat);
   lsSet(LS_CODE, codeEl.value.trim());
   for (const f of supported) await uploadOne(f, boat);

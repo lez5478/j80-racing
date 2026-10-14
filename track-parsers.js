@@ -1,5 +1,5 @@
 // Track-file parsers shared by the replay app: Velocitek VTK, GPX, TCX,
-// Garmin FIT (decoder in fit.js) and Vakaros CSV. Every parser returns
+// Garmin FIT (decoder in fit.js), Vakaros VKX and Vakaros CSV. Every parser returns
 // { points: [{ t, lat, lon, sog, cog, heel?, pitch?, hdg? }], buttons }.
 // Loaded as a classic script before app.js; also require()-able for tests.
 
@@ -198,6 +198,55 @@ function parseTCX(text) {
   return fillSogCog(points);
 }
 
+// ---------- Vakaros VKX parser ----------
+// Native Vakaros Atlas log (spec: github.com/vakaros/vkx). A stream of rows,
+// each a 1-byte key followed by a fixed-size little-endian payload. We read
+// 0x02 (position/velocity/orientation) rows and skip everything else.
+// 0x02 payload: u64 unix ms, i32 lat 1e-7, i32 lon 1e-7, f32 SOG m/s,
+// f32 COG rad, f32 altitude, f32 quaternion w/x/y/z (true NED frame).
+const VKX_ROW_LEN = {
+  0xff: 7, 0xfe: 2, 0x01: 32, 0x02: 44, 0x03: 20, 0x04: 13, 0x05: 17,
+  0x06: 18, 0x07: 12, 0x08: 13, 0x0a: 16, 0x0b: 16, 0x0c: 12, 0x0e: 16,
+  0x0f: 16, 0x10: 12, 0x20: 13, 0x21: 52,
+};
+const MS_TO_KN = 3600 / 1852;
+function parseVKX(uint8) {
+  const dv = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
+  const points = [];
+  let i = 0;
+  while (i < uint8.length) {
+    const key = uint8[i];
+    const len = VKX_ROW_LEN[key];
+    if (len === undefined) {
+      if (!points.length) throw new Error(`Not a VKX file (unknown row 0x${key.toString(16)})`);
+      break; // unknown row → can't know its length; keep what we have
+    }
+    const p = i + 1;
+    if (p + len > uint8.length) break;
+    i = p + len;
+    if (key !== 0x02) continue;
+    const t = Number(dv.getBigUint64(p, true)) / 1000;
+    const lat = dv.getInt32(p + 8, true) / 1e7;
+    const lon = dv.getInt32(p + 12, true) / 1e7;
+    if (!lat && !lon) continue; // no GPS fix yet
+    const sog = dv.getFloat32(p + 16, true) * MS_TO_KN;
+    const cog = ((dv.getFloat32(p + 20, true) * 180 / Math.PI) % 360 + 360) % 360;
+    const w = dv.getFloat32(p + 28, true), x = dv.getFloat32(p + 32, true);
+    const y = dv.getFloat32(p + 36, true), z = dv.getFloat32(p + 40, true);
+    const pt = { t, lat, lon, sog, cog };
+    // NED body frame (x forward, y starboard, z down): ZYX Euler roll is
+    // starboard-down positive, pitch is bow-up positive, yaw is true heading.
+    if (isFinite(w) && (w || x || y || z)) {
+      const o = quatToHeelPitch(w, x, y, z);
+      pt.heel = o.heel;
+      pt.pitch = o.pitch;
+      pt.hdg = ((Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)) * 180 / Math.PI) + 360) % 360;
+    }
+    points.push(pt);
+  }
+  return { points, buttons: [] };
+}
+
 // Vakaros (and similar) CSV export. Header form:
 //   timestamp,latitude,longitude,sog_kts,cog,hdg_true,heel,trim
 // Native heel + trim → no quaternion conversion needed.
@@ -250,6 +299,7 @@ function parseVakarosCSV(text) {
 function parseTrackFile(name, bytes) {
   const ext = name.toLowerCase().split(".").pop();
   if (ext === "vtk") return parseVTK(bytes);
+  if (ext === "vkx") return parseVKX(bytes);
   if (ext === "fit") return fillSogCog(parseFIT(bytes)); // fit.js
   const text = new TextDecoder("utf-8").decode(bytes);
   if (ext === "gpx") return parseGPX(text);
@@ -259,5 +309,5 @@ function parseTrackFile(name, bytes) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { parseVTK, parseGPX, parseTCX, parseVakarosCSV, parseTrackFile, fillSogCog, quatToHeelPitch };
+  module.exports = { parseVTK, parseGPX, parseTCX, parseVakarosCSV, parseVKX, parseTrackFile, fillSogCog, quatToHeelPitch };
 }

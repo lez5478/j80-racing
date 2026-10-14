@@ -4768,7 +4768,7 @@ function sliceByTime(points, t0, t1) {
 }
 
 function indexFiles(fileList) {
-  const files = Array.from(fileList).filter((f) => /\.(vtk|gpx|tcx|fit|csv)$/i.test(f.name));
+  const files = Array.from(fileList).filter((f) => /\.(vtk|gpx|tcx|fit|csv|vkx)$/i.test(f.name));
   if (!files.length) {
     statusEl.textContent = "No .VTK files found.";
     return;
@@ -5037,7 +5037,7 @@ async function runDemo() {
     // 6. End card.
     showDemoOverlay(
       `<strong>Want to see your boat next to mine?</strong>` +
-      `Drop your VTK / GPX / TCX / FIT / Vakaros CSV at` +
+      `Drop your VTK / GPX / TCX / FIT / Vakaros VKX or CSV at` +
       `<div class="demo-cta">j80-racing.yafo78.workers.dev/upload</div>`,
     );
     await new Promise((r) => setTimeout(r, 5000));
