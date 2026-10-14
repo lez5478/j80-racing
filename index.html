@@ -39,6 +39,13 @@
       <option value="hko">HKO stations</option>
     </select>
   </label>
+  <label class="wb-toggle" title="Boat speeds: wind strength read from how fast the boats sailed (J/80 polar) over the last 5 minutes — shows light and strong patches">
+    Particle colour:
+    <select id="windSpeedSource" class="wb-select" style="margin-left:6px;">
+      <option value="boats">Boat speeds</option>
+      <option value="hko">HKO wind</option>
+    </select>
+  </label>
   <div id="wind" hidden>
     <h2>Wind that day</h2>
     <div class="wind-body"></div>

@@ -738,8 +738,14 @@ const WindParticleLayer = L.Layer.extend({
     ctx.globalCompositeOperation = "source-over";
 
     const samples = currentWindSamples();
-    const have = samples.length >= 3;
     const fleetDeg = fleetWindDeg(raceTime);
+    // Boat-speed wind colours/speeds the particles when chosen; direction
+    // still comes from the stations (or the race wind without them).
+    const boatW = boatWindSamplesAt(raceTime);
+    const useBoats = boatW.length >= 3;
+    const fallbackDeg = useBoats ? raceWindDegAt(raceTime) : null;
+    const have = samples.length >= 3 || (useBoats && fallbackDeg != null);
+    boatWindLegend.show(useBoats && this._map === map);
 
     // Maintain particle count proportional to canvas area (~1 per 5000 px²).
     const target = have ? Math.min(1500, Math.max(200, Math.round((W * H) / 5000))) : 0;
@@ -759,7 +765,22 @@ const WindParticleLayer = L.Layer.extend({
       p.age++;
       const oldX = p.x, oldY = p.y;
       const ll = this._map.containerPointToLatLng([p.x, p.y]);
-      const w = have ? withFleetDir(idwAt(ll.lat, ll.lng, samples), fleetDeg) : null;
+      let w = !have ? null
+        : samples.length >= 3 ? withFleetDir(idwAt(ll.lat, ll.lng, samples), fleetDeg)
+        : { deg: fallbackDeg, spd: 0 };
+      let color = null;
+      if (w && useBoats) {
+        const b = boatWindAt(ll.lat, ll.lng, boatW);
+        // Colour only where boats sailed in the window: full within 500 m of
+        // a reading, fading to 1.2 km; beyond that, neutral pale particles.
+        if (b.nearM < 1200) {
+          const alpha = b.nearM < 500 ? 0.9 : 0.9 - (b.nearM - 500) / 700 * 0.5;
+          color = `rgba(${boatWindRgb(b.tws)},${alpha.toFixed(2)})`;
+          w = { ...w, spd: b.tws * 1.852 };
+        } else {
+          color = "rgba(226,232,240,0.35)";
+        }
+      }
       if (!w || w.spd < 0.2 || p.age > p.maxAge ||
           p.x < 0 || p.x > W || p.y < 0 || p.y > H) {
         this._spawn(p); continue;
@@ -770,7 +791,8 @@ const WindParticleLayer = L.Layer.extend({
       p.y -= w.spd * Math.cos(rad) * SCALE;
       // Same Beaufort color ramp as the station markers for consistency.
       const s = w.spd;
-      ctx.strokeStyle = s < 6 ? "rgba(158,197,255,0.85)"
+      ctx.strokeStyle = color ? color
+                      : s < 6 ? "rgba(158,197,255,0.85)"
                       : s < 12 ? "rgba(111,208,107,0.85)"
                       : s < 20 ? "rgba(250,204,21,0.9)"
                       : s < 30 ? "rgba(251,146,60,0.95)"
@@ -784,6 +806,27 @@ const WindParticleLayer = L.Layer.extend({
     this._raf = requestAnimationFrame(this._tick.bind(this));
   },
 });
+
+// Map legend for the boat-speed wind colours; shown only while they're used.
+const boatWindLegend = (() => {
+  const ctl = L.control({ position: "topright" });
+  let el = null, shown = false;
+  ctl.onAdd = () => {
+    el = L.DomUtil.create("div", "boat-wind-legend");
+    el.title = "Wind strength read from the boats' speeds over the last 5 minutes (J/80 polar)";
+    el.innerHTML = `<div class="bwl-h">Wind from boat speeds (kn)</div>` +
+      BOAT_WIND_BANDS.map((b) =>
+        `<span class="bwl-band"><i style="background:rgb(${b.rgb})"></i>${b.label}</span>`).join("");
+    return el;
+  };
+  return {
+    show(on) {
+      if (on === shown) return;
+      shown = on;
+      if (on) ctl.addTo(map); else ctl.remove();
+    },
+  };
+})();
 
 const windParticles = new WindParticleLayer();
 let windParticlesShown = _particlesAvailable;
@@ -810,7 +853,7 @@ if (windParticleToggle) {
   windParticleToggle.addEventListener("change", () => {
     windParticlesShown = windParticleToggle.checked;
     if (windParticlesShown) windParticles.addTo(map);
-    else map.removeLayer(windParticles);
+    else { map.removeLayer(windParticles); boatWindLegend.show(false); }
   });
 }
 
@@ -914,6 +957,86 @@ function fleetWindDeg(t) {
   }
   return null;
 }
+// Particle colour / speed source: "boats" = wind strength read from the
+// fleet's boat speeds (J/80 polar, last 5 min), "hko" = station speeds.
+const LS_WIND_SPD = "sailing.windSpeedSource";
+let windSpeedSource = localStorage.getItem(LS_WIND_SPD) === "hko" ? "hko" : "boats";
+const BOAT_WIND_WINDOW_SEC = 5 * 60;
+// raceName → [{ t, lat, lon, tws }] for the whole race, time-sorted.
+const _boatWindByRace = new Map();
+function boatWindForRace(raceName) {
+  if (_boatWindByRace.has(raceName)) return _boatWindByRace.get(raceName);
+  const twd = raceWindByName.get(raceName);
+  const info = raceWindInfo.get(raceName);
+  let all = [];
+  if (twd != null && info) {
+    const race = tracks.find((t) => !t.removed && t.meta?.race?.name === raceName)?.meta.race;
+    const g = race ? Date.parse(race.start) / 1000 : info.from;
+    const perBoat = tracks
+      .filter((t) => !t.removed && t.meta?.race?.name === raceName)
+      .map((t) => boatWindSamples(t, twd, polarSpeed, g, info.to));
+    all = normalizeBoatWind(perBoat).flat().sort((a, b) => a.t - b.t);
+  }
+  _boatWindByRace.set(raceName, all);
+  return all;
+}
+// Boat-speed wind samples for the race running at time t, from the last
+// BOAT_WIND_WINDOW_SEC. Memoised per 5 s of race clock.
+let _boatWindMemo = { key: null, samples: [] };
+function boatWindSamplesAt(t) {
+  if (windSpeedSource !== "boats" || t == null) return [];
+  let raceName = null;
+  for (const [name, info] of raceWindInfo) if (t >= info.from && t <= info.to) { raceName = name; break; }
+  if (!raceName) return [];
+  const key = `${raceName}|${Math.round(t / 5)}`;
+  if (_boatWindMemo.key === key) return _boatWindMemo.samples;
+  const samples = boatWindForRace(raceName).filter((s) => s.t <= t && s.t > t - BOAT_WIND_WINDOW_SEC);
+  _boatWindMemo = { key, samples };
+  return samples;
+}
+// Race wind direction at time t (fleet or HKO per the direction choice),
+// used to steer particles when no station field is loaded.
+function raceWindDegAt(t) {
+  for (const [name, info] of raceWindInfo) {
+    if (t >= info.from && t <= info.to) return raceWindByName.get(name) ?? null;
+  }
+  return null;
+}
+// Boat-speed wind at (lat, lon): a Gaussian-weighted average of nearby
+// readings (σ = 150 m) so light and strong patches stay distinct instead
+// of blending into one fleet mean; far from every reading it tends to the
+// nearest one. Also returns the distance (m) to that nearest reading.
+const BOAT_WIND_SIGMA_M = 150;
+function boatWindAt(lat, lon, samples) {
+  const cosLat = Math.cos(lat * Math.PI / 180);
+  const d2s = new Array(samples.length);
+  let near = Infinity;
+  for (let i = 0; i < samples.length; i++) {
+    const dy = (lat - samples[i].lat) * 111_320, dx = (lon - samples[i].lon) * 111_320 * cosLat;
+    d2s[i] = dx * dx + dy * dy;
+    if (d2s[i] < near) near = d2s[i];
+  }
+  const k = 1 / (2 * BOAT_WIND_SIGMA_M * BOAT_WIND_SIGMA_M);
+  let wSum = 0, vSum = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const w = Math.exp(-(d2s[i] - near) * k); // relative to nearest: no underflow
+    wSum += w; vSum += w * samples[i].tws;
+  }
+  return { tws: vSum / wSum, nearM: Math.sqrt(near) };
+}
+// Knot bands for boat-speed wind colours (also drawn in the map legend).
+const BOAT_WIND_BANDS = [
+  { max: 8, rgb: "96,165,250", label: "< 8" },
+  { max: 10, rgb: "34,211,238", label: "8–10" },
+  { max: 12, rgb: "74,222,128", label: "10–12" },
+  { max: 14, rgb: "250,204,21", label: "12–14" },
+  { max: 16, rgb: "251,146,60", label: "14–16" },
+  { max: Infinity, rgb: "239,68,68", label: "16+" },
+];
+function boatWindRgb(tws) {
+  return BOAT_WIND_BANDS.find((b) => tws < b.max).rgb;
+}
+
 // Apply the fleet direction (if any) to an IDW wind sample.
 function withFleetDir(w, fleetDeg) {
   return w && fleetDeg != null ? { ...w, deg: fleetDeg } : w;
@@ -1616,10 +1739,22 @@ if (windSourceSel) {
       const deg = windSource === "fleet" && info.implied ? info.implied.deg : info.hko;
       if (deg != null) raceWindByName.set(name, deg); else raceWindByName.delete(name);
     }
+    _boatWindByRace.clear(); // TWA, so the boat-speed wind, depends on it
+    _boatWindMemo.key = null;
     renderLadderRungs();
     renderLaylinesOnMap();
     renderWindGrid();
     if (raceTime != null) updateBoatsToRaceTime(raceTime);
+  });
+}
+
+const windSpeedSel = document.getElementById("windSpeedSource");
+if (windSpeedSel) {
+  windSpeedSel.value = windSpeedSource;
+  windSpeedSel.addEventListener("change", () => {
+    windSpeedSource = windSpeedSel.value;
+    localStorage.setItem(LS_WIND_SPD, windSpeedSource);
+    _boatWindMemo.key = null;
   });
 }
 
@@ -5037,6 +5172,7 @@ function clearTracks() {
   raceFinishLines.clear();
   raceWindByName.clear();
   raceWindInfo.clear();
+  _boatWindByRace.clear();
   markRoundingsLayer.clearLayers();
   raceFinishLineLayer.clearLayers();
   laylinesLayer.clearLayers();

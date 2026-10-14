@@ -268,6 +268,89 @@ function impliedWindFromBeat(tracks, startSec, endSec, wMark, seedDeg) {
   return { deg: twd, tackAngle, nStbd: stbd.length, nPort: port.length };
 }
 
+// ---------- Wind strength read from boat speed ----------
+// Inverts a polar: the true wind speed (kn) at which a boat on `twaDeg`
+// would sail `sogKn`. Clamped to 4–20 kn — above ~16 kn the polar is
+// nearly flat, so stronger readings would be noise.
+function invertPolar(polarFn, sogKn, twaDeg) {
+  const lo = 4, hi = 20;
+  if (sogKn <= polarFn(lo, twaDeg)) return lo;
+  if (sogKn >= polarFn(hi, twaDeg)) return hi;
+  let a = lo, b = hi;
+  for (let k = 0; k < 20; k++) {
+    const m = (a + b) / 2;
+    if (polarFn(m, twaDeg) < sogKn) a = m; else b = m;
+  }
+  return (a + b) / 2;
+}
+
+// Wind-strength samples along one boat's track: every `step` s between
+// t0 and t1, the boat's SOG and COG averaged over the previous `avg` s are
+// read against the polar. Skipped: turning (COG spread > 20°), slow
+// (< 1.5 kn), or within 30° of the wind (pinching / head to wind).
+// Returns [{ t, lat, lon, tws }] (tws in kn).
+function boatWindSamples(track, twdDeg, polarFn, t0, t1, step = 10, avg = 30) {
+  const pts = track.points;
+  const out = [];
+  if (twdDeg == null || !pts.length) return out;
+  const toRad = Math.PI / 180;
+  const wrap = (a) => ((a + 540) % 360) - 180;
+  let lo = 0, hi = 0;
+  for (let t = Math.max(t0, pts[0].t + avg); t <= Math.min(t1, pts[pts.length - 1].t); t += step) {
+    while (lo < pts.length && pts[lo].t < t - avg) lo++;
+    while (hi < pts.length && pts[hi].t <= t) hi++;
+    const n = hi - lo;
+    if (n < 3) continue;
+    let sog = 0, sx = 0, sy = 0;
+    for (let i = lo; i < hi; i++) {
+      sog += pts[i].sog || 0;
+      sx += Math.sin(pts[i].cog * toRad); sy += Math.cos(pts[i].cog * toRad);
+    }
+    sog /= n;
+    const cog = (Math.atan2(sx, sy) / toRad + 360) % 360;
+    let spread = 0;
+    for (let i = lo; i < hi; i++) spread = Math.max(spread, Math.abs(wrap(pts[i].cog - cog)));
+    if (spread > 20 || sog < 1.5) continue;
+    const twa = wrap(cog - twdDeg);
+    if (Math.abs(twa) < 30) continue;
+    const p = pts[hi - 1];
+    out.push({ t, lat: p.lat, lon: p.lon, twa, tws: invertPolar(polarFn, sog, twa) });
+  }
+  return out;
+}
+
+// Leave only where and when boats were faster or slower than usual:
+// 1. per point of sail across the fleet — a generic polar under-reads
+//    reaches and over-reads spinnaker runs, so each band (upwind < 70°,
+//    reach 70–120°, downwind) is scaled to the fleet median;
+// 2. per boat — crew skill and sails, same scaling.
+// Mutates and returns perBoat.
+function normalizeBoatWind(perBoat) {
+  const median = (arr) => {
+    const s = arr.slice().sort((a, b) => a - b);
+    return s.length ? s[Math.floor(s.length / 2)] : null;
+  };
+  const all = perBoat.flat();
+  const fleet = median(all.map((s) => s.tws));
+  if (fleet == null) return perBoat;
+  const band = (s) => {
+    const a = Math.abs(s.twa ?? 90);
+    return a < 70 ? "up" : a < 120 ? "reach" : "down";
+  };
+  for (const b of ["up", "reach", "down"]) {
+    const group = all.filter((s) => band(s) === b);
+    const m = median(group.map((s) => s.tws));
+    if (m) for (const s of group) s.tws *= fleet / m;
+  }
+  for (const samples of perBoat) {
+    const m = median(samples.map((s) => s.tws));
+    if (!m) continue;
+    for (const s of samples) s.tws *= fleet / m;
+  }
+  return perBoat;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { getWindProgress, getCourseProgress, officialFinishElapsed, liveTimeGap, impliedWindFromBeat };
+  module.exports = { getWindProgress, getCourseProgress, officialFinishElapsed, liveTimeGap,
+    impliedWindFromBeat, invertPolar, boatWindSamples, normalizeBoatWind };
 }

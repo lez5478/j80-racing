@@ -102,3 +102,40 @@ test("impliedWindFromBeat bisects the two tacks, whatever the seed", () => {
   assert.equal(impliedWindFromBeat(run, 0, 1000, null, 85), null);
   assert.equal(impliedWindFromBeat([mk(1, 0)], 0, 1000, null, null), null);
 });
+
+// ---------- wind strength from boat speed ----------
+test("boatWindSamples reads TWS back from the polar and skips turns", () => {
+  const { invertPolar, boatWindSamples, normalizeBoatWind } = require("../race-metrics.js");
+  // Toy polar: speed grows with wind, slower close to the wind.
+  const polar = (tws, twa) => tws * 0.5 * Math.min(1, Math.abs(twa) / 90);
+  assert.ok(Math.abs(invertPolar(polar, 5, 90) - 10) < 0.01);
+  assert.equal(invertPolar(polar, 0.1, 90), 4);  // clamped low
+  assert.equal(invertPolar(polar, 50, 90), 20);  // clamped high
+  // Beam reach (COG 0°, wind from 90°) at 5 kn → 10 kn of wind; a tack at
+  // t = 200–210 s is skipped, as is a stretch pointing into the wind.
+  const pts = [];
+  for (let t = 0; t <= 400; t++) {
+    const cog = t >= 200 && t < 210 ? (t - 200) * 18 : t > 300 ? 80 : 0;
+    pts.push({ t, lat: 22.2, lon: 114.2, cog, sog: 5 });
+  }
+  const s = boatWindSamples({ points: pts }, 90, polar, 0, 400);
+  assert.ok(s.length > 10);
+  for (const x of s) {
+    assert.ok(!(x.t > 200 && x.t < 240), `turn sample at ${x.t}`);
+    assert.ok(x.t <= 300, `head-to-wind sample at ${x.t}`);
+    assert.ok(Math.abs(x.tws - 10) < 0.01);
+  }
+  // Pace normalisation: a boat always 20% slower reads the same wind.
+  const fast = [{ tws: 10 }, { tws: 12 }, { tws: 14 }];
+  const slow = [{ tws: 8 }, { tws: 9.6 }, { tws: 11.2 }];
+  normalizeBoatWind([fast, slow]);
+  assert.ok(Math.abs(slow[1].tws - fast[1].tws) < 1.5);
+  assert.ok(slow[2].tws > slow[0].tws); // spatial contrast kept
+  // Point-of-sail bias: runs read high, beats low for the same wind; after
+  // normalising, the gust (14 vs 10) shows in both bands.
+  const up = [{ twa: 45, tws: 8 }, { twa: 45, tws: 8 }, { twa: 45, tws: 11.2 }];
+  const run = [{ twa: 160, tws: 12 }, { twa: 160, tws: 12 }, { twa: 160, tws: 16.8 }];
+  normalizeBoatWind([[...up, ...run]]);
+  assert.ok(Math.abs(up[0].tws - run[0].tws) < 0.01);
+  assert.ok(up[2].tws / up[0].tws > 1.3 && run[2].tws / run[0].tws > 1.3);
+});

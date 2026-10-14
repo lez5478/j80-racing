@@ -516,6 +516,23 @@ body.finish-line-edit-mode .leaflet-container { cursor: crosshair !important; }
   max-height: 40vh;
   overflow-y: auto;
 }
+.boat-wind-legend {
+  background: rgba(15, 25, 36, 0.88);
+  color: #dbe7f3;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  font-family: -apple-system, Segoe UI, sans-serif;
+  font-size: 11px;
+  max-width: 170px;
+}
+.boat-wind-legend .bwl-h { font-weight: 600; margin-bottom: 4px; }
+.boat-wind-legend .bwl-band {
+  display: inline-flex; align-items: center; gap: 4px;
+  width: 50%; line-height: 1.6; font-variant-numeric: tabular-nums;
+}
+.boat-wind-legend i { width: 14px; height: 4px; border-radius: 2px; display: inline-block; }
 .tl-row {
   display: flex; align-items: center; gap: 6px;
   padding: 3px 4px; border-radius: 3px;
