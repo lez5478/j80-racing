@@ -305,10 +305,17 @@ function addTrack(name, points, meta = {}) {
     const PIN_COLOR = "#22c55e";   // green — Pin end
     const rname = meta?.race?.name;
     const boatName = meta?.boat || name;
-    if (startMarks.rc && !isPingHidden(rname, boatName, "RC", startMarks.rc.lat, startMarks.rc.lon)) {
+    // A boat that didn't ping borrows another boat's line; label and hide
+    // each ping under the boat that recorded it.
+    const rcBy = startMarks.rc?.by || boatName;
+    const pinBy = startMarks.pin?.by || boatName;
+    const pingedBy = (by) => by === boatName ? name : `${name} · pinged by ${by}`;
+    const hidden = (by, end, ll) =>
+      isPingHidden(rname, by, end, ll.lat, ll.lon) || isPingHidden(rname, boatName, end, ll.lat, ll.lon);
+    if (startMarks.rc && !hidden(rcBy, "RC", startMarks.rc)) {
       const rcMark = L.circleMarker([startMarks.rc.lat, startMarks.rc.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: RC_COLOR, fillOpacity: 1,
-      }).bindTooltip(`RC end · ${name} (click in edit mode for actions)`);
+      }).bindTooltip(`RC end · ${pingedBy(rcBy)} (click in edit mode for actions)`);
       registerPerBoatStartGraphic(rname, rcMark, "ping");
       rcMark.on("click", (ev) => {
         if (window.__startLineDebug) console.log("RC click", { startLineEditMode, rname });
@@ -317,14 +324,14 @@ function addTrack(name, points, meta = {}) {
           ev.originalEvent.preventDefault?.();
           L.DomEvent.stopPropagation?.(ev.originalEvent);
         }
-        openStartPingPopup(rcMark, rname, "RC", boatName, startMarks.rc.lat, startMarks.rc.lon);
+        openStartPingPopup(rcMark, rname, "RC", rcBy, startMarks.rc.lat, startMarks.rc.lon);
       });
       layerChildren.push(rcMark);
     }
-    if (startMarks.pin && !isPingHidden(rname, boatName, "Pin", startMarks.pin.lat, startMarks.pin.lon)) {
+    if (startMarks.pin && !hidden(pinBy, "Pin", startMarks.pin)) {
       const pinMark = L.circleMarker([startMarks.pin.lat, startMarks.pin.lon], {
         radius: 6, weight: 2, color: "#0f1924", fillColor: PIN_COLOR, fillOpacity: 1,
-      }).bindTooltip(`Pin end · ${name} (click in edit mode for actions)`);
+      }).bindTooltip(`Pin end · ${pingedBy(pinBy)} (click in edit mode for actions)`);
       registerPerBoatStartGraphic(rname, pinMark, "ping");
       pinMark.on("click", (ev) => {
         if (window.__startLineDebug) console.log("Pin click", { startLineEditMode, rname });
@@ -333,7 +340,7 @@ function addTrack(name, points, meta = {}) {
           ev.originalEvent.preventDefault?.();
           L.DomEvent.stopPropagation?.(ev.originalEvent);
         }
-        openStartPingPopup(pinMark, rname, "Pin", boatName, startMarks.pin.lat, startMarks.pin.lon);
+        openStartPingPopup(pinMark, rname, "Pin", pinBy, startMarks.pin.lat, startMarks.pin.lon);
       });
       layerChildren.push(pinMark);
     }
@@ -342,7 +349,7 @@ function addTrack(name, points, meta = {}) {
         [startMarks.rc.lat, startMarks.rc.lon],
         [startMarks.pin.lat, startMarks.pin.lon],
       ], { color: "#fff", weight: 2.5, opacity: 0.9, dashArray: "6 4" })
-        .bindTooltip(`Start line · ${name}`);
+        .bindTooltip(`Start line · ${rcBy === pinBy ? pingedBy(rcBy) : `${name} · RC ${rcBy}, pin ${pinBy}`}`);
       registerPerBoatStartGraphic(rname, startLine, "line");
       layerChildren.push(startLine);
     }
@@ -928,8 +935,10 @@ function renderStartLineSourcePicker() {
   for (const c of cands) {
     const opt = document.createElement("option");
     opt.value = c.key;
-    const boats = c.boats.length === 1 ? c.boats[0] : `${c.boats[0]} (+${c.boats.length - 1})`;
-    opt.textContent = `${boats}`;
+    const rcBy = c.sm.rc.by, pinBy = c.sm.pin.by;
+    const pinger = !rcBy || !pinBy ? c.boats[0]
+      : rcBy === pinBy ? rcBy : `RC ${rcBy} / pin ${pinBy}`;
+    opt.textContent = c.boats.length > 1 ? `${pinger} (${c.boats.length} boats)` : pinger;
     if (c.key === chosen) opt.selected = true;
     sel.appendChild(opt);
   }
@@ -3934,7 +3943,9 @@ async function selectDay(key) {
       if (!byBoat.has(boat)) byBoat.set(boat, { points: [], buttons: [] });
       const slot = byBoat.get(boat);
       slot.points.push(...points);
-      slot.buttons.push(...buttons);
+      // Tag each ping with the boat that recorded it — other boats borrow
+      // the line, and the picker / map tooltips should credit the pinger.
+      slot.buttons.push(...buttons.map((b) => ({ ...b, by: boat })));
     } catch (e) {
       console.error(`Failed to read ${f.name}:`, e);
     }
