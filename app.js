@@ -926,8 +926,7 @@ if (ladderRungsShown) ladderRungsLayer.addTo(map);
 
 // All distinct start-line candidates for a race — one per boat that has
 // pinged both an RC and a pin. Boats that pinged identical positions are
-// merged. Used by the "Start line from:" picker so the user can override
-// the auto-default when boats disagree.
+// merged; startLineForRace picks the one most boats share.
 function startLineCandidates(raceName) {
   const seen = new Map(); // key → { sm, boats: [boatName, …] }
   for (const tr of tracks) {
@@ -941,47 +940,14 @@ function startLineCandidates(raceName) {
   }
   return [...seen.values()];
 }
-function startLineKey(raceName) {
-  return `sailing.startLineKey.${activeDayKey}.${raceName}`;
-}
+// The ladder's start line: the candidate most boats agree on. Once an
+// admin sets the canonical line it is copied into every track's
+// startMarks, so it is then the only candidate.
 function startLineForRace(raceName) {
   const cands = startLineCandidates(raceName);
   if (!cands.length) return null;
-  const chosen = localStorage.getItem(startLineKey(raceName));
-  if (chosen) {
-    const hit = cands.find((c) => c.key === chosen);
-    if (hit) return hit.sm;
-  }
-  // Default: the candidate most boats agree on.
   cands.sort((a, b) => b.boats.length - a.boats.length);
   return cands[0].sm;
-}
-function renderStartLineSourcePicker() {
-  const sel = document.getElementById("startLineSource");
-  const wrap = document.getElementById("startLineSourceWrap");
-  if (!sel || !wrap) return;
-  const raceName = ladderRaceName();
-  if (!raceName) { wrap.hidden = true; return; }
-  const cands = startLineCandidates(raceName);
-  if (cands.length < 2) { wrap.hidden = true; return; }
-  wrap.hidden = false;
-  cands.sort((a, b) => b.boats.length - a.boats.length);
-  const chosen = localStorage.getItem(startLineKey(raceName)) || cands[0].key;
-  sel.innerHTML = "";
-  for (const c of cands) {
-    const opt = document.createElement("option");
-    opt.value = c.key;
-    const rcBy = c.sm.rc.by, pinBy = c.sm.pin.by;
-    const pinger = !rcBy || !pinBy ? c.boats[0]
-      : rcBy === pinBy ? rcBy : `RC ${rcBy} / pin ${pinBy}`;
-    opt.textContent = c.boats.length > 1 ? `${pinger} (${c.boats.length} boats)` : pinger;
-    if (c.key === chosen) opt.selected = true;
-    sel.appendChild(opt);
-  }
-  sel.onchange = () => {
-    localStorage.setItem(startLineKey(raceName), sel.value);
-    renderLadderRungs();
-  };
 }
 
 // ---------- Canonical (admin-curated) finish lines ----------
@@ -3570,7 +3536,6 @@ function updateBoatsToRaceTime(t) {
   refreshStartCountdown();
   renderMatchChip();
   renderRaceMarksOnMap(); renderFinishLineOnMap(); renderLaylinesOnMap();
-  renderStartLineSourcePicker();
   renderCanonicalStartLine();
   renderLadderRungs();
   renderWindShadows();
