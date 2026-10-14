@@ -322,7 +322,7 @@ function addTrack(name, points, meta = {}) {
         if (!startLineEditMode || !rname) return;
         if (ev?.originalEvent) {
           ev.originalEvent.preventDefault?.();
-          L.DomEvent.stopPropagation?.(ev.originalEvent);
+          L.DomEvent.stopPropagation(ev); // Leaflet event, so the map click handler skips it
         }
         openStartPingPopup(rcMark, rname, "RC", rcBy, startMarks.rc.lat, startMarks.rc.lon);
       });
@@ -338,7 +338,7 @@ function addTrack(name, points, meta = {}) {
         if (!startLineEditMode || !rname) return;
         if (ev?.originalEvent) {
           ev.originalEvent.preventDefault?.();
-          L.DomEvent.stopPropagation?.(ev.originalEvent);
+          L.DomEvent.stopPropagation(ev); // Leaflet event, so the map click handler skips it
         }
         openStartPingPopup(pinMark, rname, "Pin", pinBy, startMarks.pin.lat, startMarks.pin.lon);
       });
@@ -1234,6 +1234,38 @@ function openStartPingPopup(marker, raceName, originalEnd, boat, lat, lon) {
   }, 0);
 }
 
+// Start-line edit mode, click on open water: place the canonical RC or pin
+// end exactly there — for days when no boat's ping sits on the committee
+// boat. A missing other end is taken from the current line so one manual
+// end is enough to complete it.
+function openManualStartEndPopup(raceName, latlng) {
+  const lat = latlng.lat, lon = latlng.lng;
+  const btn = "display:block;width:100%;margin-bottom:4px;padding:5px;cursor:pointer;background:#1c3653;color:#fff;border:0;border-radius:4px;";
+  const popup = L.popup({ closeButton: true, autoClose: true, closeOnClick: false })
+    .setLatLng([lat, lon])
+    .setContent(`
+    <div style="font-size:12px;min-width:180px;color:#0f1924;">
+      <div style="margin-bottom:6px"><b>Place start-line end</b> · ${raceName}</div>
+      <button id="_mse_rc" style="${btn}">Committee boat (RC) here</button>
+      <button id="_mse_pin" style="${btn}">Pin end here</button>
+    </div>`)
+    .openOn(map);
+  setTimeout(() => {
+    const place = (end) => {
+      const other = end === "rc" ? "pin" : "rc";
+      const cur = canonicalStartLines.get(raceName);
+      const fallback = startLineForRace(raceName)?.[other];
+      if (!cur?.[other] && fallback) pickCanonicalEnd(raceName, other, fallback);
+      pickCanonicalEnd(raceName, end, { lat, lng: lon });
+      map.closePopup(popup);
+    };
+    const rcB = document.getElementById("_mse_rc");
+    const pinB = document.getElementById("_mse_pin");
+    if (rcB) rcB.onclick = () => place("rc");
+    if (pinB) pinB.onclick = () => place("pin");
+  }, 0);
+}
+
 // Hook this into addTrack: when in edit mode, clicking any boat's RC or
 // pin ping designates it as the canonical RC/pin for that race.
 function pickCanonicalEnd(raceName, end /* "rc" | "pin" */, latlng) {
@@ -1319,7 +1351,7 @@ function setStartLineEditMode(on) {
   startLineEditMode = !!on;
   editStartLineBtn.classList.toggle("active", startLineEditMode);
   editStartLineBtn.textContent = startLineEditMode
-    ? "Click an RC or Pin ping — done"
+    ? "Click a ping or the map — done"
     : "✎ Edit start line";
   document.body.classList.toggle("start-line-edit-mode", startLineEditMode);
   const r = ladderRaceName();
@@ -3778,6 +3810,15 @@ map.on("click", (e) => {
     setFinishLineEditMode(false);
     lastRenderedFinishRace = null;
     renderFinishLineOnMap();
+    return;
+  }
+  // Start-line edit: clicking open water places an RC / pin end manually
+  // (clicks on boats' pings open their own popup and don't reach here).
+  if (startLineEditMode) {
+    const r = activeRaceFilter || ladderRaceName() ||
+      (window.RACES?.[activeDayKey] || [])[0]?.name;
+    if (!r) { alert("Pick a race tab first."); return; }
+    openManualStartEndPopup(r, e.latlng);
     return;
   }
   if (!manualMarkEditMode) return;
