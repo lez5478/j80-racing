@@ -256,11 +256,11 @@ function addTrack(name, points, meta = {}) {
   const latlngs = points.map((p) => [p.lat, p.lon]);
   // Trail polyline starts EMPTY — points are appended as the race clock
   // advances so you actually watch the boat draw its track during playback.
-  // Dotted style (round caps + zero-length dashes) so the underlying map
-  // and other boats' tracks stay readable behind it.
+  // Dotted style (round caps + short dashes) so the underlying map and
+  // other boats' tracks stay readable behind it.
   const line = L.polyline([latlngs[0]], {
-    color, weight: 3, opacity: 0.95,
-    dashArray: "6 5",
+    color, weight: 2, opacity: 0.9,
+    dashArray: "1 5", lineCap: "round",
   });
   // Tooltip uses just the boat name — race context is already obvious
   // from the active race tab and start-countdown panel.
@@ -883,6 +883,21 @@ function renderWindShadows() {
 // Drawn between the active race's start line and its windward (W) mark,
 // 10 evenly-spaced rungs. Width = 1.5× upwind-leg length to comfortably
 // cover typical fleet spread on either side of the rhumb.
+// Boat-track display: the whole path so far, only the last 5 minutes, or
+// none (boat icons only). Chosen in the sidebar, remembered per browser.
+const LS_TRAIL = "sailing.trailMode";
+const TRAIL_RECENT_SEC = 5 * 60;
+let trailMode = ["full", "recent", "none"].includes(localStorage.getItem(LS_TRAIL))
+  ? localStorage.getItem(LS_TRAIL) : "full";
+// Earliest time drawn in a boat's trail at clock time t. Pre-start
+// wandering is trimmed to the last 2 minutes before the gun.
+function trailStartTime(tr, t) {
+  const rstartSec = tr.meta?.race?.start ? Date.parse(tr.meta.race.start) / 1000 : null;
+  let from = rstartSec != null ? rstartSec - 120 : -Infinity;
+  if (trailMode === "recent") from = Math.max(from, t - TRAIL_RECENT_SEC);
+  return from;
+}
+
 const LS_LADDER = "sailing.ladderRungs";
 let ladderRungsShown = localStorage.getItem(LS_LADDER) === "1";
 const ladderRungsLayer = L.layerGroup();
@@ -1448,6 +1463,16 @@ if (ladderRungsToggle) {
     } else {
       map.removeLayer(ladderRungsLayer);
     }
+  });
+}
+
+const trailModeSel = document.getElementById("trailMode");
+if (trailModeSel) {
+  trailModeSel.value = trailMode;
+  trailModeSel.addEventListener("change", () => {
+    trailMode = trailModeSel.value;
+    localStorage.setItem(LS_TRAIL, trailMode);
+    if (raceTime != null) updateBoatsToRaceTime(raceTime);
   });
 }
 
@@ -3452,12 +3477,9 @@ function updateBoatsToRaceTime(t) {
         fillOpacity: showStartDot ? 1 : 0,
       });
     }
-    // Trim the trail to the last 2 minutes BEFORE the gun onwards. Pre-start
-    // wandering creates noise that hides the actual race tactics, so we
-    // start the dashed line at race-start − 120 s. The boat icon itself is
-    // still rendered before that window.
-    const rstartSec = tr.meta?.race?.start ? Date.parse(tr.meta.race.start) / 1000 : null;
-    const trailStart = rstartSec != null ? rstartSec - 120 : -Infinity;
+    // Trim the trail per trailStartTime (pre-start noise, "last 5 min"
+    // mode). The boat icon itself is still rendered before that window.
+    const trailStart = trailStartTime(tr, clamped);
     let lower = 0;
     if (trailStart > -Infinity) {
       let llo = 0, lhi = pts.length - 1;
@@ -3469,7 +3491,7 @@ function updateBoatsToRaceTime(t) {
     }
     // Show the trail only once we're inside the 2-minute pre-start window.
     let trail;
-    if (clamped < trailStart) {
+    if (trailMode === "none" || clamped < trailStart) {
       trail = []; // hide trail entirely; boat icon still appears at s
     } else {
       trail = tr.latlngs.slice(lower, lo + 1);
@@ -5002,7 +5024,7 @@ myBoatPicker?.addEventListener("change", () => {
 const DEMO_STEPS = [
   { atSec: 0,  caption: "<strong>RHKYC J/80 Race Replay</strong>Pick a race day &mdash; we'll watch <em>R3 Frostbite 12</em>, 28 March 2026." },
   { atSec: 3,  caption: "<strong>Race scoreboard</strong>Live results pulled from the RHKYC PDF, with your boat highlighted." },
-  { atSec: 6,  caption: "<strong>Boat trail draws as the race unfolds</strong>Press play, watch the dashed track grow behind the boat." },
+  { atSec: 6,  caption: "<strong>Boat trail draws as the race unfolds</strong>Press play, watch the dotted track grow behind the boat." },
   { atSec: 14, caption: "<strong>Live wind</strong>Real HKO wind across 30 stations interpolated to your position." },
   { atSec: 22, caption: "<strong>Click any boat</strong>Translucent popup shows live SOG / COG / time." },
   { atSec: 30, caption: "<strong>Race stats sidebar</strong>Tacks, gybes, mark roundings, polar %, heel, time-to-line." },
@@ -5190,9 +5212,9 @@ function refresh3DScene() {
       id: lId, type: "line", source: sId,
       paint: {
         "line-color": t.color,
-        "line-width": 3,
-        "line-dasharray": [2, 2],
-        "line-opacity": 0.95,
+        "line-width": 2,
+        "line-dasharray": [1, 3],
+        "line-opacity": 0.9,
       },
     });
   }
@@ -5533,13 +5555,21 @@ function update3DBoats(t) {
           const mid = (lo + hi) >> 1;
           if (pts[mid].t <= clamped) lo = mid; else hi = mid;
         }
-        // Only redraw if the head index moved (avoids per-frame churn).
-        const lastIdx = tr.userData_lastTrailIdx;
-        if (lastIdx !== lo) {
-          tr.userData_lastTrailIdx = lo;
-          const coords = new Array(lo + 2);
-          for (let i = 0; i <= lo; i++) coords[i] = [pts[i].lon, pts[i].lat];
-          coords[lo + 1] = [s.lon, s.lat]; // include interpolated tip
+        // Same window as the 2D trail (pre-start trim, last-5-min, none).
+        const from = trailStartTime(tr, clamped);
+        let first = 0, fhi = lo + 1; // first index with t ≥ from
+        while (first < fhi) {
+          const mid = (first + fhi) >> 1;
+          if (pts[mid].t < from) first = mid + 1; else fhi = mid;
+        }
+        if (trailMode === "none" || clamped < from) first = lo + 1;
+        // Only redraw if the trail's ends moved (avoids per-frame churn).
+        const idxKey = `${first}:${lo}`;
+        if (tr.userData_lastTrailIdx !== idxKey) {
+          tr.userData_lastTrailIdx = idxKey;
+          const coords = [];
+          for (let i = first; i <= lo; i++) coords.push([pts[i].lon, pts[i].lat]);
+          if (first <= lo) coords.push([s.lon, s.lat]); // include interpolated tip
           src.setData({
             type: "Feature",
             geometry: { type: "LineString", coordinates: coords },
