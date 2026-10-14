@@ -36,10 +36,12 @@ different file under an existing name is refused (409).
 | Endpoint | Access | Purpose |
 | --- | --- | --- |
 | `GET /api/records` | public | `{ Boat: { date: [path, …] } }` listing of R2 tracks |
-| `POST /api/upload` | fleet code | multipart `boat`, `date`, `filename`, `file` (VTK/GPX/TCX/FIT/CSV, ≤ 30 MB) |
+| `POST /api/upload` | fleet code | multipart `boat`, `date`, `filename`, `file` (VTK/VKX/GPX/TCX/FIT/CSV, ≤ 30 MB) |
 | `GET /api/wind` | public | aggregated hourly HKO wind |
 | `GET /api/marks?date=` / `POST /api/marks` | public | canonical marks / submit a proposal |
 | `GET /api/marks-history`, `POST /api/marks-promote` | admin | review and promote mark proposals |
+| `GET /api/start-lines?date=` | public | corrected (canonical) start lines `{ race: { rc, pin } }` for that day |
+| `POST /api/start-lines` | admin | `{ date, lines: { race: { rc?, pin? } \| null } }` — set from the app's "Edit start line" mode |
 | `GET /api/race-overrides` | public | corrected race start times, applied by the app on load |
 | `POST /api/race-overrides` | admin | `{ date, title, start: "HH:MM" \| null }` — edit on `admin-races.html` |
 | `GET /api/refresh-wind?hours=24` | admin | pull the last N (≤ 48) HKO hours now |

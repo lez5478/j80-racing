@@ -363,6 +363,55 @@ export default {
       return json({ ok: true, date, title, override: all[date]?.[title] || null });
     }
 
+    // ---------- GET /api/start-lines?date=YYYY-MM-DD ----------
+    // Admin-curated ("canonical") start lines, shared by everyone:
+    //   { "<race name>": { rc: {lat,lon}, pin: {lat,lon}, ts }, … }
+    if (url.pathname === "/api/start-lines" && request.method === "GET") {
+      const date = (url.searchParams.get("date") || "").trim();
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      const blob = await env.SAIL_RECORDS.get(`start-lines/${date}.json`);
+      if (!blob) return json({});
+      return new Response(blob.body, {
+        headers: { "content-type": "application/json", "cache-control": "no-cache", ...CORS_HEADERS },
+      });
+    }
+
+    // ---------- POST /api/start-lines (admin) ----------
+    // Body: { date, lines: { "<race name>": { rc?, pin? } | null, … } }
+    // Each listed race is replaced (null removes it); others are kept. One
+    // request per edit so several races update without racing each other.
+    if (url.pathname === "/api/start-lines" && request.method === "POST") {
+      if (!checkAdmin(request, env)) return json({ error: "unauthorized" }, { status: 401 });
+      let body;
+      try { body = await request.json(); }
+      catch { return json({ error: "JSON expected" }, { status: 400 }); }
+      const date = String(body.date || "").trim();
+      if (!DATE_RE.test(date)) return json({ error: "bad date" }, { status: 400 });
+      const lines = body.lines && typeof body.lines === "object" ? body.lines : null;
+      if (!lines || Object.keys(lines).length > 32) return json({ error: "bad lines" }, { status: 400 });
+      const cleanLL = (p) => {
+        if (!p) return null;
+        const lat = Number(p.lat), lon = Number(p.lon);
+        return Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180
+          ? { lat, lon } : null;
+      };
+      const key = `start-lines/${date}.json`;
+      const existing = await env.SAIL_RECORDS.get(key);
+      const all = existing ? JSON.parse(await existing.text()) : {};
+      for (const [race, line] of Object.entries(lines)) {
+        if (!race || race.length > 64 || !/^[\w .'()\/-]+$/.test(race)) {
+          return json({ error: "bad race" }, { status: 400 });
+        }
+        const rc = cleanLL(line?.rc), pin = cleanLL(line?.pin);
+        if (!rc && !pin) delete all[race];
+        else all[race] = { ...(rc && { rc }), ...(pin && { pin }), ts: Date.now() };
+      }
+      await env.SAIL_RECORDS.put(key, JSON.stringify(all), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      return json({ ok: true, date, lines: all });
+    }
+
     // ---------- GET /api/marks ----------
     // Returns canonical per-day manually-placed course marks shared by all
     // users. Shape: { <raceName>: [ { lat, lon, label }, … ] }.

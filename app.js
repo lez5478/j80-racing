@@ -1009,8 +1009,8 @@ function otherForFinish(raceName) {
 // ---------- Canonical (admin-curated) start lines ----------
 // Per (date, race) the user can keep one boat's RC ping and another
 // boat's pin ping, build the "real" start line, and re-run analysis
-// for every boat with that line. Stored in localStorage; survives
-// reload. Server sync mirrors the manual-marks pattern (TODO).
+// for every boat with that line. Shared through /api/start-lines (writes
+// need the admin code) and mirrored in localStorage for offline reloads.
 const canonicalStartLines = new Map(); // raceName → { rc, pin, ts }
 let startLineEditMode = false;
 
@@ -1044,11 +1044,98 @@ function loadCanonicalStartLinesForDay(dateKey) {
       }
     } catch { localStorage.removeItem(k); }
   }
+  fetchSharedStartLines(dateKey);
+}
+// The shared copy wins over this browser's. Lines that exist only here
+// (set before sharing existed) are uploaded if this browser has the admin
+// code — never prompted for on load.
+async function fetchSharedStartLines(dateKey) {
+  let shared;
+  try {
+    const r = await fetch(`/api/start-lines?date=${encodeURIComponent(dateKey)}`, { cache: "no-store" });
+    if (!r.ok) return;
+    shared = await r.json();
+  } catch { return; } // offline / local dev — localStorage copy stays
+  if (dateKey !== activeDayKey) return;
+  const valid = (p) => p && Number.isFinite(p.lat) && Number.isFinite(p.lon);
+  const touched = [];
+  for (const [race, line] of Object.entries(shared || {})) {
+    const clean = { ts: line?.ts || Date.now() };
+    if (valid(line?.rc)) clean.rc = { lat: line.rc.lat, lon: line.rc.lon };
+    if (valid(line?.pin)) clean.pin = { lat: line.pin.lat, lon: line.pin.lon };
+    if (!clean.rc && !clean.pin) continue;
+    canonicalStartLines.set(race, clean);
+    try { localStorage.setItem(`sailing.canonStartLine.${dateKey}.${race}`, JSON.stringify(clean)); } catch { /* quota */ }
+    touched.push(race);
+  }
+  if (lsAdminToken()) {
+    for (const race of canonicalStartLines.keys()) {
+      if (!(race in (shared || {}))) queueStartLinePush(race);
+    }
+  }
+  if (touched.length) refreshCanonicalStartLines(touched);
+}
+function refreshCanonicalStartLines(races) {
+  for (const r of races) {
+    const cur = canonicalStartLines.get(r);
+    if (cur?.rc && cur?.pin) applyCanonicalStartLineToTracks(r);
+    applyPerBoatStartVisibility(r);
+  }
+  renderCanonicalStartLine();
+  renderLadderRungs();
+  if (selectedTrackId != null) selectTrack(selectedTrackId);
 }
 function saveCanonicalStartLine(raceName) {
   const obj = canonicalStartLines.get(raceName);
   if (obj) localStorage.setItem(canonStartLineKey(raceName), JSON.stringify(obj));
   else localStorage.removeItem(canonStartLineKey(raceName));
+  queueStartLinePush(raceName);
+}
+// Edits are batched (one POST per edit gesture, even across all races of
+// the day) and sent with the admin code shared with the admin pages.
+const LS_ADMIN_TOKEN = "sailing.adminToken";
+function lsAdminToken() {
+  try { return localStorage.getItem(LS_ADMIN_TOKEN) || ""; } catch { return ""; }
+}
+const _startLinePush = new Set();
+let _startLinePushTimer = null;
+let _startLineShareDeclined = false;
+function queueStartLinePush(raceName) {
+  _startLinePush.add(raceName);
+  clearTimeout(_startLinePushTimer);
+  _startLinePushTimer = setTimeout(flushStartLinePush, 0);
+}
+async function flushStartLinePush() {
+  const date = activeDayKey;
+  if (!date || !_startLinePush.size) return;
+  const lines = {};
+  for (const race of _startLinePush) {
+    const o = canonicalStartLines.get(race);
+    lines[race] = o ? { rc: o.rc || null, pin: o.pin || null } : null;
+  }
+  _startLinePush.clear();
+  let token = lsAdminToken();
+  if (!token) {
+    if (_startLineShareDeclined) return;
+    token = (prompt("Admin code to share this start line with everyone.\n(Cancel keeps it on this browser only.)") || "").trim();
+    if (!token) { _startLineShareDeclined = true; return; }
+    try { localStorage.setItem(LS_ADMIN_TOKEN, token); } catch { /* private mode */ }
+  }
+  try {
+    const r = await fetch("/api/start-lines", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-admin-token": token },
+      body: JSON.stringify({ date, lines }),
+    });
+    if (r.status === 401) {
+      try { localStorage.removeItem(LS_ADMIN_TOKEN); } catch { /* ignore */ }
+      alert("Admin code not accepted — the start line is saved on this browser only.");
+    } else if (!r.ok) {
+      alert(`Couldn't share the start line (HTTP ${r.status}) — saved on this browser only.`);
+    }
+  } catch {
+    alert("Couldn't reach the server — the start line is saved on this browser only.");
+  }
 }
 // Push the chosen rc+pin into every track of that race so analyzeRace
 // (and every existing call site that reads track.meta.startMarks) sees
@@ -1061,8 +1148,8 @@ function applyCanonicalStartLineToTracks(raceName) {
     if (t.removed) continue;
     if (t.meta?.race?.name !== raceName) continue;
     if (!t.meta.startMarks) t.meta.startMarks = {};
-    t.meta.startMarks.rc = { ...obj.rc };
-    t.meta.startMarks.pin = { ...obj.pin };
+    if (obj.rc) t.meta.startMarks.rc = { ...obj.rc };
+    if (obj.pin) t.meta.startMarks.pin = { ...obj.pin };
   }
 }
 const canonicalStartLineLayer = L.layerGroup().addTo(map);
@@ -1213,6 +1300,7 @@ function openStartPingPopup(marker, raceName, originalEnd, boat, lat, lon) {
       <button id="_spp_rc" style="display:block;width:100%;margin-bottom:4px;padding:5px;cursor:pointer;background:#1c3653;color:#fff;border:0;border-radius:4px;">Set as canonical RC</button>
       <button id="_spp_pin" style="display:block;width:100%;margin-bottom:4px;padding:5px;cursor:pointer;background:#1c3653;color:#fff;border:0;border-radius:4px;">Set as canonical Pin</button>
       <button id="_spp_hide" style="display:block;width:100%;padding:5px;cursor:pointer;background:#7a2a2a;color:#fff;border:0;border-radius:4px;">Hide this ping</button>
+      ${allRacesCheckboxHtml("_spp_all")}
     </div>`;
   const popup = L.popup({ closeButton: true, autoClose: false, closeOnClick: false })
     .setLatLng([lat, lon])
@@ -1224,14 +1312,40 @@ function openStartPingPopup(marker, raceName, originalEnd, boat, lat, lon) {
     const pinB = document.getElementById("_spp_pin");
     const hideB = document.getElementById("_spp_hide");
     if (window.__startLineDebug) console.log("ping popup buttons", !!rcB, !!pinB, !!hideB);
-    if (rcB) rcB.onclick = () => { pickCanonicalEnd(raceName, "rc", { lat, lng: lon }); map.closePopup(popup); };
-    if (pinB) pinB.onclick = () => { pickCanonicalEnd(raceName, "pin", { lat, lng: lon }); map.closePopup(popup); };
+    const place = (end) => {
+      for (const r of targetRaces(raceName, "_spp_all")) placeCanonicalEnd(r, end, { lat, lng: lon });
+      map.closePopup(popup);
+    };
+    if (rcB) rcB.onclick = () => place("rc");
+    if (pinB) pinB.onclick = () => place("pin");
     if (hideB) hideB.onclick = () => {
       hidePing(raceName, boat, originalEnd, lat, lon);
       if (marker.remove) marker.remove();
       map.closePopup(popup);
     };
   }, 0);
+}
+
+// "Apply to all races that day" option shared by both start-line popups.
+function allRacesCheckboxHtml(id) {
+  const n = (window.RACES?.[activeDayKey] || []).length;
+  if (n < 2) return "";
+  return `<label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;">
+    <input type="checkbox" id="${id}"> Apply to all ${n} races that day</label>`;
+}
+function targetRaces(raceName, checkboxId) {
+  const all = document.getElementById(checkboxId)?.checked;
+  return all ? (window.RACES?.[activeDayKey] || []).map((r) => r.name) : [raceName];
+}
+// Set one end of a race's canonical line; a missing other end is taken
+// from that race's current line, so one placed end completes it.
+function placeCanonicalEnd(raceName, end, latlng) {
+  const other = end === "rc" ? "pin" : "rc";
+  const fallback = startLineForRace(raceName)?.[other];
+  if (!canonicalStartLines.get(raceName)?.[other] && fallback) {
+    pickCanonicalEnd(raceName, other, fallback);
+  }
+  pickCanonicalEnd(raceName, end, latlng);
 }
 
 // Start-line edit mode, click on open water: place the canonical RC or pin
@@ -1248,15 +1362,12 @@ function openManualStartEndPopup(raceName, latlng) {
       <div style="margin-bottom:6px"><b>Place start-line end</b> · ${raceName}</div>
       <button id="_mse_rc" style="${btn}">Committee boat (RC) here</button>
       <button id="_mse_pin" style="${btn}">Pin end here</button>
+      ${allRacesCheckboxHtml("_mse_all")}
     </div>`)
     .openOn(map);
   setTimeout(() => {
     const place = (end) => {
-      const other = end === "rc" ? "pin" : "rc";
-      const cur = canonicalStartLines.get(raceName);
-      const fallback = startLineForRace(raceName)?.[other];
-      if (!cur?.[other] && fallback) pickCanonicalEnd(raceName, other, fallback);
-      pickCanonicalEnd(raceName, end, { lat, lng: lon });
+      for (const r of targetRaces(raceName, "_mse_all")) placeCanonicalEnd(r, end, { lat, lng: lon });
       map.closePopup(popup);
     };
     const rcB = document.getElementById("_mse_rc");
