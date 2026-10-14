@@ -260,8 +260,11 @@ function addTrack(name, points, meta = {}) {
   // other boats' tracks stay readable behind it.
   const line = L.polyline([latlngs[0]], {
     color, weight: 2, opacity: 0.9,
-    dashArray: "1 5", lineCap: "round",
+    dashArray: "1 5", lineCap: "round", interactive: false,
   });
+  // The dotted line is too thin (and gappy) to click, so an invisible
+  // wide copy along the same path takes the clicks and tooltip.
+  const hit = L.polyline([latlngs[0]], { color, weight: 14, opacity: 0 });
   // Tooltip uses just the boat name — race context is already obvious
   // from the active race tab and start-countdown panel.
   const tipBoat = meta?.boat || name;
@@ -271,7 +274,7 @@ function addTrack(name, points, meta = {}) {
 
   const maxSog = points.reduce((m, p) => Math.max(m, p.sog || 0), 0);
   const duration = points[points.length - 1].t - points[0].t;
-  line.bindTooltip(
+  hit.bindTooltip(
     `${tipBoat} · ${humanDuration(duration)} · max ${maxSog.toFixed(1)} kn`,
     { sticky: true }
   );
@@ -296,7 +299,7 @@ function addTrack(name, points, meta = {}) {
     closeButton: true,
   });
 
-  const layerChildren = [line, start, boat];
+  const layerChildren = [line, hit, start, boat];
 
   // If the helmsman pinged a start line for this race, render it.
   const startMarks = meta?.startMarks;
@@ -391,7 +394,7 @@ function addTrack(name, points, meta = {}) {
     cumDist[i] = cumDist[i - 1] + Math.sqrt(dLat * dLat + dLon * dLon);
   }
   const track = {
-    id, name, layer, line, points, color, visible: true,
+    id, name, layer, line, hit, points, color, visible: true,
     latlngs, fullBounds, cumDist, gaps,
     boat, maxSog, startMarker: start,
     tStart: points[0].t, tEnd: points[points.length - 1].t,
@@ -402,7 +405,7 @@ function addTrack(name, points, meta = {}) {
   const selectFromMarker = () => selectTrack(id);
   // Clicking the track polyline both selects the track AND seeks the race
   // clock to the nearest point on that track.
-  line.on("click", (e) => {
+  hit.on("click", (e) => {
     selectFromMarker();
     seekToTrackPoint(tracks[id], e.latlng);
   });
@@ -3498,6 +3501,7 @@ function updateBoatsToRaceTime(t) {
       trail.push([s.lat, s.lon]);
     }
     tr.line.setLatLngs(trail);
+    tr.hit.setLatLngs(trail);
     // If the boat's popup is open, keep its readout in sync with the clock.
     if (tr.boat.isPopupOpen()) tr.boat.setPopupContent(boatPopupHtml(tr, s));
   }
