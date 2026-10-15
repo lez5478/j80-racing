@@ -755,9 +755,9 @@ const WindParticleLayer = L.Layer.extend({
     // Pixels per (km/h · second) — tune by eye. At ~15 km/h a particle
     // should drift across the screen in a few seconds at city zoom.
     const SCALE = 0.8;
-    ctx.lineWidth = 0.8;
+    ctx.lineWidth = 1;
     ctx.lineCap = "round";
-    ctx.globalAlpha = 0.55; // subdued: the map and boats stay the focus
+    ctx.globalAlpha = 0.75; // a little subdued: the map and boats stay the focus
     for (const p of this._particles) {
       p.age++;
       const oldX = p.x, oldY = p.y;
