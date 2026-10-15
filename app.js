@@ -355,23 +355,19 @@ function addTrack(name, points, meta = {}) {
     }
   }
 
-  // Detect data gaps (>5 s between consecutive fixes) so the user can see
-  // where GPS dropouts happened. Each gap stores its bounding times +
-  // endpoints; renders as a thin red dashed line between the two fixes
-  // and lets updateBoatsToRaceTime mark the boat icon as "in-gap" while
-  // the playback clock is inside one.
+  // Detect GPS dropouts so updateBoatsToRaceTime can mark the boat icon
+  // "in-gap" (stale, interpolated position) while the clock is inside one.
+  // A gap is long relative to the file's own rate — Garmin "smart
+  // recording" logs every 1–10 s, and those pauses aren't dropouts. (No
+  // map drawing: static gap segments ignored the clock and trail mode.)
+  const dts = [];
+  for (let i = 1; i < points.length; i++) dts.push(points[i].t - points[i - 1].t);
+  const typicalDt = dts.length ? dts.slice().sort((a, b) => a - b)[Math.floor(dts.length / 2)] : 1;
+  const gapSec = Math.max(5, typicalDt * 5, 15);
   const gaps = [];
   for (let i = 1; i < points.length; i++) {
-    const dt = points[i].t - points[i - 1].t;
-    if (dt > 5) {
-      const a = points[i - 1], b = points[i];
-      const segment = L.polyline(
-        [[a.lat, a.lon], [b.lat, b.lon]],
-        { color: "#ef4444", weight: 1.5, opacity: 0.85, dashArray: "2 5", interactive: false },
-      );
-      layerChildren.push(segment);
-      gaps.push({ t0: a.t, t1: b.t, durSec: dt });
-    }
+    const dt = dts[i - 1];
+    if (dt > gapSec) gaps.push({ t0: points[i - 1].t, t1: points[i].t, durSec: dt });
   }
 
   const layer = L.layerGroup(layerChildren).addTo(map);
@@ -733,7 +729,7 @@ const WindParticleLayer = L.Layer.extend({
 
     // Fade previous frame.
     ctx.globalCompositeOperation = "destination-in";
-    ctx.fillStyle = "rgba(0,0,0,0.92)";
+    ctx.fillStyle = "rgba(0,0,0,0.88)";
     ctx.fillRect(0, 0, W, H);
     ctx.globalCompositeOperation = "source-over";
 
@@ -748,7 +744,7 @@ const WindParticleLayer = L.Layer.extend({
     boatWindLegend.show(useBoats && this._map === map);
 
     // Maintain particle count proportional to canvas area (~1 per 5000 px²).
-    const target = have ? Math.min(1500, Math.max(200, Math.round((W * H) / 5000))) : 0;
+    const target = have ? Math.min(600, Math.max(100, Math.round((W * H) / 12000))) : 0;
     while (this._particles.length < target) {
       const p = {};
       this._spawn(p);
@@ -759,8 +755,9 @@ const WindParticleLayer = L.Layer.extend({
     // Pixels per (km/h · second) — tune by eye. At ~15 km/h a particle
     // should drift across the screen in a few seconds at city zoom.
     const SCALE = 0.8;
-    ctx.lineWidth = 1.1;
+    ctx.lineWidth = 0.8;
     ctx.lineCap = "round";
+    ctx.globalAlpha = 0.55; // subdued: the map and boats stay the focus
     for (const p of this._particles) {
       p.age++;
       const oldX = p.x, oldY = p.y;
@@ -802,6 +799,7 @@ const WindParticleLayer = L.Layer.extend({
       ctx.lineTo(p.x, p.y);
       ctx.stroke();
     }
+    ctx.globalAlpha = 1;
 
     this._raf = requestAnimationFrame(this._tick.bind(this));
   },
